@@ -3,12 +3,18 @@ package com.example.gpacalculator
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -66,10 +72,38 @@ class MainActivity : ComponentActivity() {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun GpaCalculatorScreen(viewModel: GpaViewModel, uiState: GpaUiState) {
+    // Track scrolling
+    val listState = rememberLazyListState()
+    
+    // Calculate if we should show the "Sticky" subtitle
+    // If the first item (index 0, the selector) is scrolled past, show the subtitle
+    val showStickySubtitle by remember {
+        derivedStateOf {
+            listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > 100
+        }
+    }
+
     Scaffold(
         topBar = {
             CenterAlignedTopAppBar(
-                title = { Text("GPA Calculator", fontWeight = FontWeight.Bold) },
+                title = {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text("GPA Calculator", fontWeight = FontWeight.Bold)
+                        
+                        // Seamless Animation: Show Uni Name when selector scrolls away
+                        AnimatedVisibility(
+                            visible = showStickySubtitle,
+                            enter = fadeIn(),
+                            exit = fadeOut()
+                        ) {
+                            Text(
+                                text = uiState.selectedUniversity.name,
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
+                },
                 colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
                     containerColor = MaterialTheme.colorScheme.primaryContainer,
                     titleContentColor = MaterialTheme.colorScheme.onPrimaryContainer
@@ -101,53 +135,58 @@ fun GpaCalculatorScreen(viewModel: GpaViewModel, uiState: GpaUiState) {
             }
         }
     ) { paddingValues ->
-        Column(
+        
+        // Everything is now inside ONE LazyColumn for full-screen scrolling
+        LazyColumn(
+            state = listState,
             modifier = Modifier
                 .padding(paddingValues)
                 .fillMaxSize()
-                .padding(16.dp)
+                .padding(horizontal = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+            contentPadding = PaddingValues(bottom = 16.dp)
         ) {
-            UniversitySelector(
-                available = uiState.availableUniversities,
-                selected = uiState.selectedUniversity,
-                onSelect = { viewModel.setUniversity(it) },
-                onAddClick = { viewModel.startAddingUniversity() },
-                onEditClick = { viewModel.startEditingUniversity(it) },
-                onDeleteClick = { viewModel.deleteUniversity(it) }
-            )
-            
-            Spacer(modifier = Modifier.height(16.dp))
-
-            SubjectCountHeader(
-                count = uiState.subjects.size,
-                onCountChange = { viewModel.setSubjectCount(it) }
-            )
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            LazyColumn(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                itemsIndexed(uiState.subjects) { index, subject ->
-                    SubjectCard(
-                        index = index + 1,
-                        subject = subject,
-                        university = uiState.selectedUniversity,
-                        onUpdate = { credits, grade -> 
-                            viewModel.updateSubject(index, credits, grade) 
-                        }
-                    )
-                }
-            }
-            
-            if (uiState.calculatedGpa != null) {
-                ResultDialog(
-                    gpa = uiState.calculatedGpa!!,
-                    classification = uiState.classification ?: "",
-                    onDismiss = { viewModel.dismissResult() }
+            // Item 0: University Selector
+            item {
+                Spacer(modifier = Modifier.height(8.dp))
+                UniversitySelector(
+                    available = uiState.availableUniversities,
+                    selected = uiState.selectedUniversity,
+                    onSelect = { viewModel.setUniversity(it) },
+                    onAddClick = { viewModel.startAddingUniversity() },
+                    onEditClick = { viewModel.startEditingUniversity(it) },
+                    onDeleteClick = { viewModel.deleteUniversity(it) }
                 )
             }
+
+            // Item 1: Subject Count Header
+            item {
+                SubjectCountHeader(
+                    count = uiState.subjects.size,
+                    onCountChange = { viewModel.setSubjectCount(it) }
+                )
+            }
+
+            // Item 2+: Subject Cards
+            itemsIndexed(uiState.subjects) { index, subject ->
+                SubjectCard(
+                    index = index + 1,
+                    subject = subject,
+                    university = uiState.selectedUniversity,
+                    onUpdate = { credits, grade -> 
+                        viewModel.updateSubject(index, credits, grade) 
+                    }
+                )
+            }
+        }
+
+        // Result Dialog Popup
+        if (uiState.calculatedGpa != null) {
+            ResultDialog(
+                gpa = uiState.calculatedGpa!!,
+                classification = uiState.classification ?: "",
+                onDismiss = { viewModel.dismissResult() }
+            )
         }
     }
 }
@@ -165,7 +204,6 @@ fun AddUniversityScreen(
 ) {
     var uniName by remember { mutableStateOf(existingUniversity?.name ?: "") }
     
-    // Grades State
     val grades = remember { 
         mutableStateListOf<TempGrade>().apply {
             if (existingUniversity != null) {
@@ -176,7 +214,6 @@ fun AddUniversityScreen(
         }
     }
     
-    // Rules State (Now using TempRule for String inputs)
     val classifications = remember { 
         mutableStateListOf<TempRule>().apply {
             if (existingUniversity != null) {
@@ -201,7 +238,6 @@ fun AddUniversityScreen(
                 },
                 actions = {
                     TextButton(onClick = { 
-                        // Convert Temps back to Real Data
                         val finalGrades = grades.map { 
                             Grade(it.symbol, it.pointStr.toDoubleOrNull() ?: 0.0)
                         }
@@ -236,7 +272,6 @@ fun AddUniversityScreen(
             
             Spacer(modifier = Modifier.height(24.dp))
             
-            // --- Grades Editor ---
             Text("Grading Scale", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
             Spacer(modifier = Modifier.height(8.dp))
             
@@ -272,7 +307,6 @@ fun AddUniversityScreen(
 
             Spacer(modifier = Modifier.height(24.dp))
 
-            // --- Rules Editor ---
             Text("Classifications", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
             Spacer(modifier = Modifier.height(8.dp))
             
@@ -302,8 +336,6 @@ fun AddUniversityScreen(
                             )
                         }
                     }
-                    // Helper to remove rule if needed (optional enhancement)
-                    // IconButton(...) 
                 }
             }
              OutlinedButton(onClick = { classifications.add(TempRule(minStr="", maxStr="", label="")) }, modifier = Modifier.fillMaxWidth()) {
@@ -318,7 +350,7 @@ fun AddUniversityScreen(
 
 // --- Sub-Components ---
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class, ExperimentalFoundationApi::class)
 @Composable
 fun UniversitySelector(
     available: List<University>, 
@@ -357,12 +389,11 @@ fun UniversitySelector(
                                     fontWeight = if(isSelected) FontWeight.Bold else FontWeight.Normal
                                 ) 
                             },
-                            // Add trailing icon ONLY for custom unis to act as the menu trigger
                             trailingIcon = if (uni.isCustom) {
                                 {
                                     IconButton(
                                         onClick = { showMenuFor = uni },
-                                        modifier = Modifier.size(16.dp) // Compact size
+                                        modifier = Modifier.size(16.dp)
                                     ) {
                                         Icon(
                                             Icons.Default.MoreVert, 
@@ -427,21 +458,20 @@ fun SubjectCountHeader(count: Int, onCountChange: (Int) -> Unit) {
             expanded = expanded,
             onExpandedChange = { expanded = !expanded }
         ) {
-            // Using a Box with an OutlinedTextField look-alike prevents keyboard popup
-            // while keeping the Material Design style.
+            // Disabled keyboard interaction by using enabled = false and clickable logic
             OutlinedTextField(
                 value = "Select",
                 onValueChange = {},
-                readOnly = true, // Must be true
-                enabled = false, // Disabling interaction ensuring keyboard never shows
+                readOnly = true,
+                enabled = false, 
                 trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
                 modifier = Modifier
                     .menuAnchor()
                     .width(120.dp)
                     .clickable(
                         interactionSource = remember { MutableInteractionSource() },
-                        indication = null // Disable ripple if desired, or keep default
-                    ) { expanded = true }, // Handle click on the Box wrapper
+                        indication = null
+                    ) { expanded = true },
                 textStyle = MaterialTheme.typography.bodySmall,
                 colors = OutlinedTextFieldDefaults.colors(
                     disabledTextColor = MaterialTheme.colorScheme.onSurface,
