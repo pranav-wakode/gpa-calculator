@@ -3,9 +3,9 @@ package com.example.gpacalculator
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
-import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -18,6 +18,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -28,6 +29,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.gpacalculator.ui.theme.GPACalculatorTheme
+import java.util.UUID
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -143,15 +145,16 @@ fun GpaCalculatorScreen(viewModel: GpaViewModel, uiState: GpaUiState) {
                 ResultDialog(
                     gpa = uiState.calculatedGpa!!,
                     classification = uiState.classification ?: "",
-                    onDismiss = { viewModel.dismissResult() } // FIX: Call the dismiss function
+                    onDismiss = { viewModel.dismissResult() }
                 )
             }
         }
     }
 }
 
-// --- Helper Data Class for Edit Screen to hold String input ---
-data class TempGrade(val id: String = java.util.UUID.randomUUID().toString(), var symbol: String, var pointStr: String)
+// --- Helper Data Classes for Editing ---
+data class TempGrade(val id: String = UUID.randomUUID().toString(), var symbol: String, var pointStr: String)
+data class TempRule(val id: String = UUID.randomUUID().toString(), var minStr: String, var maxStr: String, var label: String)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -162,7 +165,7 @@ fun AddUniversityScreen(
 ) {
     var uniName by remember { mutableStateOf(existingUniversity?.name ?: "") }
     
-    // Init grades: If editing, map existing grades to TempGrade. If new, default list.
+    // Grades State
     val grades = remember { 
         mutableStateListOf<TempGrade>().apply {
             if (existingUniversity != null) {
@@ -173,14 +176,16 @@ fun AddUniversityScreen(
         }
     }
     
-    // Init classifications
+    // Rules State (Now using TempRule for String inputs)
     val classifications = remember { 
-        mutableStateListOf<ClassificationRule>().apply {
+        mutableStateListOf<TempRule>().apply {
             if (existingUniversity != null) {
-                addAll(existingUniversity.classifications)
+                addAll(existingUniversity.classifications.map { 
+                    TempRule(minStr = it.minGpa.toString(), maxStr = it.maxGpa.toString(), label = it.label) 
+                })
             } else {
-                add(ClassificationRule(0.0, 5.0, "Fail"))
-                add(ClassificationRule(5.0, 10.1, "Pass"))
+                add(TempRule(minStr = "0.0", maxStr = "5.0", label = "Fail"))
+                add(TempRule(minStr = "5.0", maxStr = "10.1", label = "Pass"))
             }
         } 
     }
@@ -196,11 +201,18 @@ fun AddUniversityScreen(
                 },
                 actions = {
                     TextButton(onClick = { 
-                        // Convert TempGrade back to Grade
+                        // Convert Temps back to Real Data
                         val finalGrades = grades.map { 
                             Grade(it.symbol, it.pointStr.toDoubleOrNull() ?: 0.0)
                         }
-                        onSave(uniName, finalGrades, classifications) 
+                        val finalRules = classifications.map {
+                            ClassificationRule(
+                                minGpa = it.minStr.toDoubleOrNull() ?: 0.0,
+                                maxGpa = it.maxStr.toDoubleOrNull() ?: 0.0,
+                                label = it.label
+                            )
+                        }
+                        onSave(uniName, finalGrades, finalRules) 
                     }) {
                         Text("Save")
                     }
@@ -240,8 +252,6 @@ fun AddUniversityScreen(
                         label = { Text("Grade") },
                         modifier = Modifier.weight(1f)
                     )
-                    
-                    // FIX: Use text directly, no weird auto-formatting
                     OutlinedTextField(
                         value = grade.pointStr,
                         onValueChange = { newStr -> grades[index] = grade.copy(pointStr = newStr) },
@@ -277,24 +287,26 @@ fun AddUniversityScreen(
                         )
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                              OutlinedTextField(
-                                value = rule.minGpa.toString(),
-                                onValueChange = { classifications[index] = rule.copy(minGpa = it.toDoubleOrNull()?:0.0) },
+                                value = rule.minStr,
+                                onValueChange = { classifications[index] = rule.copy(minStr = it) },
                                 label = { Text("Min") },
                                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                                 modifier = Modifier.weight(1f)
                             )
                             OutlinedTextField(
-                                value = rule.maxGpa.toString(),
-                                onValueChange = { classifications[index] = rule.copy(maxGpa = it.toDoubleOrNull()?:0.0) },
+                                value = rule.maxStr,
+                                onValueChange = { classifications[index] = rule.copy(maxStr = it) },
                                 label = { Text("Max") },
                                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                                 modifier = Modifier.weight(1f)
                             )
                         }
                     }
+                    // Helper to remove rule if needed (optional enhancement)
+                    // IconButton(...) 
                 }
             }
-             OutlinedButton(onClick = { classifications.add(ClassificationRule(0.0, 0.0, "")) }, modifier = Modifier.fillMaxWidth()) {
+             OutlinedButton(onClick = { classifications.add(TempRule(minStr="", maxStr="", label="")) }, modifier = Modifier.fillMaxWidth()) {
                 Icon(Icons.Default.Add, null)
                 Text("Add Rule")
             }
@@ -306,7 +318,7 @@ fun AddUniversityScreen(
 
 // --- Sub-Components ---
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class, ExperimentalFoundationApi::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun UniversitySelector(
     available: List<University>, 
@@ -319,7 +331,7 @@ fun UniversitySelector(
     var showMenuFor by remember { mutableStateOf<University?>(null) }
 
     Column {
-        Text("Select University (Long press custom to edit)", style = MaterialTheme.typography.labelMedium)
+        Text("Select University", style = MaterialTheme.typography.labelMedium)
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -341,26 +353,31 @@ fun UniversitySelector(
                             onClick = { onSelect(uni) },
                             label = { 
                                 Text(
-                                    text = uni.name + if(uni.isCustom) " *" else "",
+                                    text = uni.name,
                                     fontWeight = if(isSelected) FontWeight.Bold else FontWeight.Normal
                                 ) 
                             },
+                            // Add trailing icon ONLY for custom unis to act as the menu trigger
+                            trailingIcon = if (uni.isCustom) {
+                                {
+                                    IconButton(
+                                        onClick = { showMenuFor = uni },
+                                        modifier = Modifier.size(16.dp) // Compact size
+                                    ) {
+                                        Icon(
+                                            Icons.Default.MoreVert, 
+                                            contentDescription = "Options",
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
+                                }
+                            } else null,
                             colors = FilterChipDefaults.filterChipColors(
                                 selectedContainerColor = MaterialTheme.colorScheme.primary,
                                 selectedLabelColor = Color.White
-                            ),
-                            // Enable Long Press logic for custom unis
-                            modifier = Modifier.combinedClickable(
-                                onClick = { onSelect(uni) },
-                                onLongClick = { 
-                                    if (uni.isCustom) {
-                                        showMenuFor = uni
-                                    }
-                                }
                             )
                         )
 
-                        // Context Menu for Edit/Delete
                         DropdownMenu(
                             expanded = showMenuFor == uni,
                             onDismissRequest = { showMenuFor = null }
@@ -410,14 +427,29 @@ fun SubjectCountHeader(count: Int, onCountChange: (Int) -> Unit) {
             expanded = expanded,
             onExpandedChange = { expanded = !expanded }
         ) {
+            // Using a Box with an OutlinedTextField look-alike prevents keyboard popup
+            // while keeping the Material Design style.
             OutlinedTextField(
                 value = "Select",
                 onValueChange = {},
-                readOnly = true,
+                readOnly = true, // Must be true
+                enabled = false, // Disabling interaction ensuring keyboard never shows
                 trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
-                modifier = Modifier.menuAnchor().width(120.dp),
-                textStyle = MaterialTheme.typography.bodySmall
+                modifier = Modifier
+                    .menuAnchor()
+                    .width(120.dp)
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null // Disable ripple if desired, or keep default
+                    ) { expanded = true }, // Handle click on the Box wrapper
+                textStyle = MaterialTheme.typography.bodySmall,
+                colors = OutlinedTextFieldDefaults.colors(
+                    disabledTextColor = MaterialTheme.colorScheme.onSurface,
+                    disabledBorderColor = MaterialTheme.colorScheme.outline,
+                    disabledTrailingIconColor = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             )
+            
             ExposedDropdownMenu(
                 expanded = expanded,
                 onDismissRequest = { expanded = false },
