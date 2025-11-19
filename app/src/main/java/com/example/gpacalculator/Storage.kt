@@ -12,10 +12,11 @@ object Storage {
         val prefs = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
         val jsonArray = JSONArray()
 
-        universities.forEach { uni ->
+        universities.filter { it.isCustom }.forEach { uni ->
             val uniJson = JSONObject()
             uniJson.put("id", uni.id)
             uniJson.put("name", uni.name)
+            uniJson.put("isCustom", true)
 
             // Serialize Grades
             val gradesArray = JSONArray()
@@ -55,7 +56,6 @@ object Storage {
             for (i in 0 until jsonArray.length()) {
                 val obj = jsonArray.getJSONObject(i)
                 
-                // Parse Grades
                 val gradesList = mutableListOf<Grade>()
                 val gradesArray = obj.getJSONArray("grades")
                 for (j in 0 until gradesArray.length()) {
@@ -69,7 +69,6 @@ object Storage {
                     )
                 }
 
-                // Parse Classifications
                 val classList = mutableListOf<ClassificationRule>()
                 val classArray = obj.getJSONArray("classifications")
                 for (k in 0 until classArray.length()) {
@@ -88,7 +87,8 @@ object Storage {
                         id = obj.getString("id"),
                         name = obj.getString("name"),
                         grades = gradesList,
-                        classifications = classList
+                        classifications = classList,
+                        isCustom = true
                     )
                 )
             }

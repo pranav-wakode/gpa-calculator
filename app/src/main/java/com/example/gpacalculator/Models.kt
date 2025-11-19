@@ -7,12 +7,12 @@ import java.util.UUID
 data class Grade(
     val symbol: String,
     val point: Double,
-    val isCreditCourse: Boolean = true // False for PP/NP in SPPU
+    val isCreditCourse: Boolean = true
 )
 
 data class ClassificationRule(
     val minGpa: Double,
-    val maxGpa: Double, // Exclusive usually, handles ranges like 5.5 <= GPA < 6.0
+    val maxGpa: Double,
     val label: String
 )
 
@@ -20,7 +20,8 @@ data class University(
     val id: String = UUID.randomUUID().toString(),
     val name: String,
     val grades: List<Grade>,
-    val classifications: List<ClassificationRule>
+    val classifications: List<ClassificationRule>,
+    val isCustom: Boolean = false // New flag to identify user-added universities
 )
 
 data class Subject(
@@ -47,7 +48,8 @@ object UniversityPresets {
             ClassificationRule(5.5, 6.0, "Second Class"),
             ClassificationRule(6.0, 7.5, "First Class"),
             ClassificationRule(7.5, 10.1, "Distinction")
-        )
+        ),
+        isCustom = false
     )
 
     val SPPU = University(
@@ -58,8 +60,8 @@ object UniversityPresets {
             Grade("C", 7.0), Grade("D", 6.0), Grade("E", 5.0),
             Grade("F", 0.0), Grade("AP", 0.0), Grade("FX", 0.0),
             Grade("II", 0.0),
-            Grade("PP", 0.0, false), // Non-credit
-            Grade("NP", 0.0, false)  // Non-credit
+            Grade("PP", 0.0, false),
+            Grade("NP", 0.0, false)
         ),
         classifications = listOf(
             ClassificationRule(0.0, 5.5, "Fail / Reappear"),
@@ -67,7 +69,8 @@ object UniversityPresets {
             ClassificationRule(6.25, 6.75, "Higher Second Class"),
             ClassificationRule(6.75, 7.75, "First Class"),
             ClassificationRule(7.75, 10.1, "First Class with Distinction")
-        )
+        ),
+        isCustom = false
     )
     
     fun getAll() = listOf(DBATU, SPPU)

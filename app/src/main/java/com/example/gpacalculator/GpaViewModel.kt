@@ -11,15 +11,15 @@ import java.math.RoundingMode
 import java.util.UUID
 
 data class GpaUiState(
-    val availableUniversities: List<University> = emptyList(), // All unis (presets + custom)
+    val availableUniversities: List<University> = emptyList(),
     val selectedUniversity: University = UniversityPresets.DBATU,
     val subjects: List<Subject> = generateSubjects(5),
     val calculatedGpa: Double? = null,
     val classification: String? = null,
-    val isAddingUniversity: Boolean = false // Controls navigation to "Add Uni" screen
+    val isAddingUniversity: Boolean = false,
+    val universityToEdit: University? = null // Logic for editing
 )
 
-// Helper to generate initial empty subjects
 fun generateSubjects(count: Int): List<Subject> {
     return List(count) { Subject() }
 }
@@ -38,10 +38,16 @@ class GpaViewModel(application: Application) : AndroidViewModel(application) {
     private fun refreshUniversities() {
         val customs = Storage.loadCustomUniversities(context)
         val all = UniversityPresets.getAll() + customs
-        _uiState.update { it.copy(availableUniversities = all) }
+        _uiState.update { 
+            // Check if selected university still exists, if not fallback to DBATU
+            val currentSel = it.selectedUniversity
+            val newSel = if (all.any { u -> u.id == currentSel.id }) currentSel else all.first()
+            
+            it.copy(availableUniversities = all, selectedUniversity = newSel) 
+        }
     }
 
-    // --- Main Screen Actions ---
+    // --- Main Actions ---
 
     fun setUniversity(university: University) {
         _uiState.update { it.copy(selectedUniversity = university, calculatedGpa = null, classification = null) }
@@ -74,11 +80,15 @@ class GpaViewModel(application: Application) : AndroidViewModel(application) {
     fun clearAll() {
         _uiState.update { 
             it.copy(
-                subjects = generateSubjects(it.subjects.size), // Keep count, reset data
+                subjects = generateSubjects(it.subjects.size),
                 calculatedGpa = null,
                 classification = null
             )
         }
+    }
+
+    fun dismissResult() {
+        _uiState.update { it.copy(calculatedGpa = null, classification = null) }
     }
 
     fun calculateGpa() {
@@ -113,33 +123,56 @@ class GpaViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    // --- Add University Navigation & Logic ---
+    // --- CRUD for Universities ---
 
     fun startAddingUniversity() {
-        _uiState.update { it.copy(isAddingUniversity = true) }
+        _uiState.update { it.copy(isAddingUniversity = true, universityToEdit = null) }
+    }
+
+    fun startEditingUniversity(university: University) {
+        _uiState.update { it.copy(isAddingUniversity = true, universityToEdit = university) }
     }
 
     fun cancelAddingUniversity() {
-        _uiState.update { it.copy(isAddingUniversity = false) }
+        _uiState.update { it.copy(isAddingUniversity = false, universityToEdit = null) }
     }
 
-    fun saveNewUniversity(name: String, grades: List<Grade>, rules: List<ClassificationRule>) {
+    fun saveUniversity(name: String, grades: List<Grade>, rules: List<ClassificationRule>) {
         if (name.isBlank() || grades.isEmpty()) return
 
-        val newUni = University(
-            id = UUID.randomUUID().toString(),
-            name = name,
-            grades = grades,
-            classifications = rules
-        )
+        val editMode = _uiState.value.universityToEdit
+        
+        val customs = Storage.loadCustomUniversities(context).toMutableList()
+        
+        if (editMode != null) {
+            // Edit existing
+            val index = customs.indexOfFirst { it.id == editMode.id }
+            if (index != -1) {
+                customs[index] = editMode.copy(name = name, grades = grades, classifications = rules)
+            }
+        } else {
+            // Create new
+            val newUni = University(
+                id = UUID.randomUUID().toString(),
+                name = name,
+                grades = grades,
+                classifications = rules,
+                isCustom = true
+            )
+            customs.add(newUni)
+        }
 
-        // Save to persistent storage
-        val currentCustoms = Storage.loadCustomUniversities(context).toMutableList()
-        currentCustoms.add(newUni)
-        Storage.saveCustomUniversities(context, currentCustoms)
-
-        // Refresh State
+        Storage.saveCustomUniversities(context, customs)
         refreshUniversities()
-        _uiState.update { it.copy(isAddingUniversity = false, selectedUniversity = newUni) }
+        
+        // If we just edited the currently selected university, ensure the selection updates
+        _uiState.update { it.copy(isAddingUniversity = false, universityToEdit = null) }
+    }
+
+    fun deleteUniversity(university: University) {
+        val customs = Storage.loadCustomUniversities(context).toMutableList()
+        customs.removeAll { it.id == university.id }
+        Storage.saveCustomUniversities(context, customs)
+        refreshUniversities()
     }
 }
