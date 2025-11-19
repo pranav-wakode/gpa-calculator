@@ -1,8 +1,12 @@
 package com.example.gpacalculator
 
+import android.content.Intent
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -24,17 +28,22 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.gpacalculator.ui.theme.GPACalculatorTheme
+import java.io.BufferedReader
+import java.io.InputStreamReader
 import java.util.UUID
 
 class MainActivity : ComponentActivity() {
@@ -44,6 +53,15 @@ class MainActivity : ComponentActivity() {
             GPACalculatorTheme {
                 val viewModel: GpaViewModel = viewModel()
                 val uiState by viewModel.uiState.collectAsState()
+                val context = LocalContext.current
+
+                // Listen for import messages
+                LaunchedEffect(uiState.importMessage) {
+                    uiState.importMessage?.let { msg ->
+                        Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+                        viewModel.clearImportMessage()
+                    }
+                }
                 
                 Surface(
                     modifier = Modifier.fillMaxSize(),
@@ -72,9 +90,41 @@ class MainActivity : ComponentActivity() {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun GpaCalculatorScreen(viewModel: GpaViewModel, uiState: GpaUiState) {
-    // Track scrolling
     val listState = rememberLazyListState()
-    
+    val context = LocalContext.current
+    var showMenu by remember { mutableStateOf(false) }
+
+    // --- Import Launcher ---
+    val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if (uri != null) {
+            try {
+                val inputStream = context.contentResolver.openInputStream(uri)
+                val reader = BufferedReader(InputStreamReader(inputStream))
+                val jsonString = reader.readText()
+                viewModel.importData(jsonString)
+                reader.close()
+            } catch (e: Exception) {
+                Toast.makeText(context, "Error reading file", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    // --- Export Launcher (Save File) ---
+    val exportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+        if (uri != null) {
+            try {
+                val jsonString = viewModel.getExportData()
+                context.contentResolver.openOutputStream(uri)?.use { outputStream ->
+                    outputStream.write(jsonString.toByteArray())
+                }
+                Toast.makeText(context, "Exported successfully!", Toast.LENGTH_SHORT).show()
+            } catch (e: Exception) {
+                Toast.makeText(context, "Error saving file", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    // Scroll Logic for Subtitle
     val showStickySubtitle by remember {
         derivedStateOf {
             listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > 100
@@ -99,6 +149,33 @@ fun GpaCalculatorScreen(viewModel: GpaViewModel, uiState: GpaUiState) {
                                 color = MaterialTheme.colorScheme.primary
                             )
                         }
+                    }
+                },
+                navigationIcon = {
+                    IconButton(onClick = { showMenu = true }) {
+                        Icon(Icons.Default.Menu, contentDescription = "Menu")
+                    }
+                    // Menu Dropdown
+                    DropdownMenu(
+                        expanded = showMenu,
+                        onDismissRequest = { showMenu = false }
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("Export to JSON") },
+                            leadingIcon = { Icon(Icons.Default.Share, null) },
+                            onClick = {
+                                showMenu = false
+                                exportLauncher.launch("gpa_universities.json")
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Import from JSON") },
+                            leadingIcon = { Icon(Icons.Default.Add, null) },
+                            onClick = {
+                                showMenu = false
+                                importLauncher.launch("application/json") 
+                            }
+                        )
                     }
                 },
                 colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
@@ -306,7 +383,6 @@ fun AddUniversityScreen(
             classifications.forEachIndexed { index, rule ->
                 Card(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
                     Column(modifier = Modifier.padding(8.dp)) {
-                        // Row for Label and Delete Button
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -317,8 +393,6 @@ fun AddUniversityScreen(
                                 label = { Text("Label") },
                                 modifier = Modifier.weight(1f)
                             )
-                            
-                            // Delete button for Classification (Only enable if > 2)
                             IconButton(
                                 onClick = { if (classifications.size > 2) classifications.removeAt(index) },
                                 enabled = classifications.size > 2

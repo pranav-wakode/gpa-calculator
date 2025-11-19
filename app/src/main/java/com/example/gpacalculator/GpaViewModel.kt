@@ -17,7 +17,8 @@ data class GpaUiState(
     val calculatedGpa: Double? = null,
     val classification: String? = null,
     val isAddingUniversity: Boolean = false,
-    val universityToEdit: University? = null // Logic for editing
+    val universityToEdit: University? = null,
+    val importMessage: String? = null // For Toast/Snackbar messages
 )
 
 fun generateSubjects(count: Int): List<Subject> {
@@ -39,12 +40,30 @@ class GpaViewModel(application: Application) : AndroidViewModel(application) {
         val customs = Storage.loadCustomUniversities(context)
         val all = UniversityPresets.getAll() + customs
         _uiState.update { 
-            // Check if selected university still exists, if not fallback to DBATU
             val currentSel = it.selectedUniversity
             val newSel = if (all.any { u -> u.id == currentSel.id }) currentSel else all.first()
-            
             it.copy(availableUniversities = all, selectedUniversity = newSel) 
         }
+    }
+
+    // --- Import / Export ---
+
+    fun getExportData(): String {
+        return Storage.getExportString(context)
+    }
+
+    fun importData(jsonString: String) {
+        val success = Storage.importFromString(context, jsonString)
+        if (success) {
+            refreshUniversities()
+            _uiState.update { it.copy(importMessage = "Universities imported successfully!") }
+        } else {
+            _uiState.update { it.copy(importMessage = "Failed to import. Invalid data.") }
+        }
+    }
+
+    fun clearImportMessage() {
+        _uiState.update { it.copy(importMessage = null) }
     }
 
     // --- Main Actions ---
@@ -123,7 +142,7 @@ class GpaViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    // --- CRUD for Universities ---
+    // --- CRUD ---
 
     fun startAddingUniversity() {
         _uiState.update { it.copy(isAddingUniversity = true, universityToEdit = null) }
@@ -141,17 +160,14 @@ class GpaViewModel(application: Application) : AndroidViewModel(application) {
         if (name.isBlank() || grades.isEmpty()) return
 
         val editMode = _uiState.value.universityToEdit
-        
         val customs = Storage.loadCustomUniversities(context).toMutableList()
         
         if (editMode != null) {
-            // Edit existing
             val index = customs.indexOfFirst { it.id == editMode.id }
             if (index != -1) {
                 customs[index] = editMode.copy(name = name, grades = grades, classifications = rules)
             }
         } else {
-            // Create new
             val newUni = University(
                 id = UUID.randomUUID().toString(),
                 name = name,
@@ -164,8 +180,6 @@ class GpaViewModel(application: Application) : AndroidViewModel(application) {
 
         Storage.saveCustomUniversities(context, customs)
         refreshUniversities()
-        
-        // If we just edited the currently selected university, ensure the selection updates
         _uiState.update { it.copy(isAddingUniversity = false, universityToEdit = null) }
     }
 

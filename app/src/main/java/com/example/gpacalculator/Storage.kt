@@ -49,8 +49,42 @@ object Storage {
     fun loadCustomUniversities(context: Context): List<University> {
         val prefs = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
         val jsonString = prefs.getString(KEY_CUSTOM_UNIS, null) ?: return emptyList()
-        val list = mutableListOf<University>()
+        return parseJsonToUniversities(jsonString)
+    }
 
+    // --- Export / Import Helpers ---
+
+    fun getExportString(context: Context): String {
+        val prefs = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+        return prefs.getString(KEY_CUSTOM_UNIS, "[]") ?: "[]"
+    }
+
+    fun importFromString(context: Context, jsonString: String): Boolean {
+        try {
+            // Validate by parsing first
+            val newUnis = parseJsonToUniversities(jsonString)
+            if (newUnis.isEmpty() && jsonString != "[]") return false // Basic validation
+
+            // Merge with existing
+            val current = loadCustomUniversities(context).toMutableList()
+            
+            // Avoid duplicates by ID
+            newUnis.forEach { newUni ->
+                // Remove old version if exists, then add new
+                current.removeAll { it.id == newUni.id }
+                current.add(newUni)
+            }
+            
+            saveCustomUniversities(context, current)
+            return true
+        } catch (e: Exception) {
+            e.printStackTrace()
+            return false
+        }
+    }
+
+    private fun parseJsonToUniversities(jsonString: String): List<University> {
+        val list = mutableListOf<University>()
         try {
             val jsonArray = JSONArray(jsonString)
             for (i in 0 until jsonArray.length()) {
