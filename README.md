@@ -13,7 +13,9 @@ This app allows students and teachers to calculate GPA based on custom grading s
 ### 1. Dashboard & Calculation
 The main dashboard provides a clean interface to select your university, define the number of subjects (up to 50), and input course details.
 
-![Home Screen](screenshots/gpa_calculator.jpg)
+<p align="center">
+  <img src="./screenshots/gpa_calculator.jpg" width="200" alt="Home Screen">
+</p>
 
 * **University Selector:** Scrollable list of universities. Long-press custom universities to Edit or Delete them.
 * **Subject Management:** Dynamically select between 3 to 50 subjects.
@@ -22,7 +24,9 @@ The main dashboard provides a clean interface to select your university, define 
 ### 2. Custom University Engine
 Don't see your university? Add it! You can define a completely custom grading logic.
 
-![Add University](screenshots/add_university.jpg)
+<p align="center">
+  <img src="./screenshots/add_university.jpg" width="200" alt="Add University">
+</p>
 
 * **Flexible Grading Scale:** Define grade symbols (e.g., "AA", "O", "B+") and their corresponding grade points (e.g., 10.0, 9.5).
 * **Classification Rules:** Set rules for results like "Distinction", "First Class", or "Fail" based on GPA ranges.
@@ -31,7 +35,9 @@ Don't see your university? Add it! You can define a completely custom grading lo
 ### 3. Accurate Results
 Get instant, accurate GPA calculations along with your class/grade classification based on the specific university's rules.
 
-![Calculation Result](screenshots/calculation_result.jpg)
+<p align="center">
+  <img src="./screenshots/calculation_result.jpg" width="200" alt="Calculation Result">
+</p>
 
 * **Precision:** Calculates GPA to two decimal places.
 * **Classification:** Automatically determines if you passed, failed, or achieved a distinction.
@@ -39,7 +45,9 @@ Get instant, accurate GPA calculations along with your class/grade classificatio
 ### 4. Data Portability (Import/Export)
 Seamlessly share your custom university configurations with classmates or transfer them to a new device.
 
-![Import Export](screenshots/import_export.jpg)
+<p align="center">
+  <img src="./screenshots/import_export.jpg" width="200" alt="Import Export">
+</p>
 
 * **Export:** Save your custom universities as a `.json` file.
 * **Import:** Load configurations from a `.json` file instantly.
