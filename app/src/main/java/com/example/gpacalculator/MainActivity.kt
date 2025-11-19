@@ -75,8 +75,6 @@ fun GpaCalculatorScreen(viewModel: GpaViewModel, uiState: GpaUiState) {
     // Track scrolling
     val listState = rememberLazyListState()
     
-    // Calculate if we should show the "Sticky" subtitle
-    // If the first item (index 0, the selector) is scrolled past, show the subtitle
     val showStickySubtitle by remember {
         derivedStateOf {
             listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > 100
@@ -90,7 +88,6 @@ fun GpaCalculatorScreen(viewModel: GpaViewModel, uiState: GpaUiState) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Text("GPA Calculator", fontWeight = FontWeight.Bold)
                         
-                        // Seamless Animation: Show Uni Name when selector scrolls away
                         AnimatedVisibility(
                             visible = showStickySubtitle,
                             enter = fadeIn(),
@@ -136,7 +133,6 @@ fun GpaCalculatorScreen(viewModel: GpaViewModel, uiState: GpaUiState) {
         }
     ) { paddingValues ->
         
-        // Everything is now inside ONE LazyColumn for full-screen scrolling
         LazyColumn(
             state = listState,
             modifier = Modifier
@@ -146,7 +142,6 @@ fun GpaCalculatorScreen(viewModel: GpaViewModel, uiState: GpaUiState) {
             verticalArrangement = Arrangement.spacedBy(12.dp),
             contentPadding = PaddingValues(bottom = 16.dp)
         ) {
-            // Item 0: University Selector
             item {
                 Spacer(modifier = Modifier.height(8.dp))
                 UniversitySelector(
@@ -159,7 +154,6 @@ fun GpaCalculatorScreen(viewModel: GpaViewModel, uiState: GpaUiState) {
                 )
             }
 
-            // Item 1: Subject Count Header
             item {
                 SubjectCountHeader(
                     count = uiState.subjects.size,
@@ -167,7 +161,6 @@ fun GpaCalculatorScreen(viewModel: GpaViewModel, uiState: GpaUiState) {
                 )
             }
 
-            // Item 2+: Subject Cards
             itemsIndexed(uiState.subjects) { index, subject ->
                 SubjectCard(
                     index = index + 1,
@@ -180,7 +173,6 @@ fun GpaCalculatorScreen(viewModel: GpaViewModel, uiState: GpaUiState) {
             }
         }
 
-        // Result Dialog Popup
         if (uiState.calculatedGpa != null) {
             ResultDialog(
                 gpa = uiState.calculatedGpa!!,
@@ -308,17 +300,37 @@ fun AddUniversityScreen(
             Spacer(modifier = Modifier.height(24.dp))
 
             Text("Classifications", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            Text("At least 2 rules required", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
             Spacer(modifier = Modifier.height(8.dp))
             
             classifications.forEachIndexed { index, rule ->
                 Card(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
                     Column(modifier = Modifier.padding(8.dp)) {
-                        OutlinedTextField(
-                            value = rule.label,
-                            onValueChange = { classifications[index] = rule.copy(label = it) },
-                            label = { Text("Label") },
-                            modifier = Modifier.fillMaxWidth()
-                        )
+                        // Row for Label and Delete Button
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            OutlinedTextField(
+                                value = rule.label,
+                                onValueChange = { classifications[index] = rule.copy(label = it) },
+                                label = { Text("Label") },
+                                modifier = Modifier.weight(1f)
+                            )
+                            
+                            // Delete button for Classification (Only enable if > 2)
+                            IconButton(
+                                onClick = { if (classifications.size > 2) classifications.removeAt(index) },
+                                enabled = classifications.size > 2
+                            ) {
+                                Icon(
+                                    Icons.Default.Delete, 
+                                    contentDescription = "Remove Rule",
+                                    tint = if (classifications.size > 2) MaterialTheme.colorScheme.error else Color.Gray
+                                )
+                            }
+                        }
+
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                              OutlinedTextField(
                                 value = rule.minStr,
@@ -458,7 +470,6 @@ fun SubjectCountHeader(count: Int, onCountChange: (Int) -> Unit) {
             expanded = expanded,
             onExpandedChange = { expanded = !expanded }
         ) {
-            // Disabled keyboard interaction by using enabled = false and clickable logic
             OutlinedTextField(
                 value = "Select",
                 onValueChange = {},
