@@ -1,24 +1,37 @@
 package com.example.gpacalculator
 
 import android.app.Application
+import android.graphics.Bitmap
+import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
 import java.math.BigDecimal
 import java.math.RoundingMode
 import java.util.UUID
 
+// Enhanced UI State to support Scanning
 data class GpaUiState(
     val availableUniversities: List<University> = emptyList(),
     val selectedUniversity: University = UniversityPresets.DBATU,
     val subjects: List<Subject> = generateSubjects(5),
     val calculatedGpa: Double? = null,
     val classification: String? = null,
+    
+    // Navigation/Dialog States
     val isAddingUniversity: Boolean = false,
     val universityToEdit: University? = null,
-    val importMessage: String? = null // For Toast/Snackbar messages
+    val importMessage: String? = null,
+    
+    // Scan States
+    val isScanning: Boolean = false, // Shows Camera/Gallery Picker or ROI Screen
+    val scanImageUri: Uri? = null,   // The image user picked
+    val scannedRows: List<ScannedRow>? = null, // Results from OCR
+    val isProcessingOcr: Boolean = false
 )
 
 fun generateSubjects(count: Int): List<Subject> {
@@ -46,7 +59,52 @@ class GpaViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    // --- Import / Export ---
+    // --- SCANNER LOGIC ---
+
+    fun startScan() {
+        _uiState.update { it.copy(isScanning = true, scanImageUri = null, scannedRows = null) }
+    }
+
+    fun cancelScan() {
+        _uiState.update { it.copy(isScanning = false, scanImageUri = null, scannedRows = null) }
+    }
+
+    fun onImagePicked(uri: Uri) {
+        _uiState.update { it.copy(scanImageUri = uri) }
+    }
+
+    fun processCroppedImage(bitmap: Bitmap) {
+        _uiState.update { it.copy(isProcessingOcr = true) }
+        viewModelScope.launch {
+            try {
+                val results = OcrProcessor.processImage(bitmap, _uiState.value.selectedUniversity)
+                _uiState.update { it.copy(isProcessingOcr = false, scannedRows = results) }
+            } catch (e: Exception) {
+                e.printStackTrace()
+                _uiState.update { it.copy(isProcessingOcr = false, importMessage = "OCR Failed: ${e.localizedMessage}") }
+            }
+        }
+    }
+
+    fun applyScannedSubjects(subjects: List<Subject>) {
+        // Append or Replace? Let's Append to existing or Replace if existing are empty
+        _uiState.update { current ->
+            val merged = if (current.subjects.all { it.credits == 0 && it.selectedGrade == null }) {
+                subjects
+            } else {
+                current.subjects + subjects
+            }
+            current.copy(
+                subjects = merged,
+                isScanning = false,
+                scanImageUri = null,
+                scannedRows = null,
+                calculatedGpa = null
+            )
+        }
+    }
+
+    // --- IMPORT / EXPORT ---
 
     fun getExportData(): String {
         return Storage.getExportString(context)
@@ -66,7 +124,7 @@ class GpaViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update { it.copy(importMessage = null) }
     }
 
-    // --- Main Actions ---
+    // --- MAIN ACTIONS ---
 
     fun setUniversity(university: University) {
         _uiState.update { it.copy(selectedUniversity = university, calculatedGpa = null, classification = null) }

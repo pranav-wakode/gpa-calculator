@@ -59,7 +59,15 @@ dependencies {
     implementation(libs.androidx.ui.tooling.preview)
     implementation(libs.androidx.material3)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
-    
+
+    // ML Kit (Unbundled - uses Google Play Services)
+    implementation("com.google.android.gms:play-services-mlkit-text-recognition:19.0.0")
+
+    // Coil for images
+    implementation("io.coil-kt:coil-compose:2.5.0")
+
+    // REMOVED: material-icons-extended (Saves ~9MB)
+
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)

@@ -1,6 +1,9 @@
 package com.example.gpacalculator
 
+import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -24,13 +27,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.Menu
-import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -40,9 +37,12 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.gpacalculator.ui.theme.GPACalculatorTheme
 import java.io.BufferedReader
+import java.io.File
 import java.io.InputStreamReader
 import java.util.UUID
 
@@ -55,7 +55,6 @@ class MainActivity : ComponentActivity() {
                 val uiState by viewModel.uiState.collectAsState()
                 val context = LocalContext.current
 
-                // Listen for import messages
                 LaunchedEffect(uiState.importMessage) {
                     uiState.importMessage?.let { msg ->
                         Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
@@ -67,25 +66,48 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    if (uiState.isAddingUniversity) {
-                        AddUniversityScreen(
-                            existingUniversity = uiState.universityToEdit,
-                            onSave = { name, grades, rules -> viewModel.saveUniversity(name, grades, rules) },
-                            onCancel = { viewModel.cancelAddingUniversity() }
-                        )
-                    } else {
-                        GpaCalculatorScreen(
-                            viewModel = viewModel,
-                            uiState = uiState
-                        )
+                    when {
+                        uiState.isScanning && uiState.scanImageUri != null && uiState.scannedRows == null -> {
+                            if (uiState.isProcessingOcr) {
+                                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                    CircularProgressIndicator()
+                                    Text("Reading marks...", Modifier.padding(top = 64.dp))
+                                }
+                            } else {
+                                CropScreen(
+                                    imageUri = uiState.scanImageUri!!,
+                                    onCropConfirmed = { bitmap -> viewModel.processCroppedImage(bitmap) },
+                                    onCancel = { viewModel.cancelScan() }
+                                )
+                            }
+                        }
+                        uiState.isScanning && uiState.scannedRows != null -> {
+                            VerificationScreen(
+                                scannedRows = uiState.scannedRows!!,
+                                university = uiState.selectedUniversity,
+                                onConfirm = { subjects -> viewModel.applyScannedSubjects(subjects) },
+                                onCancel = { viewModel.cancelScan() }
+                            )
+                        }
+                        uiState.isAddingUniversity -> {
+                            AddUniversityScreen(
+                                existingUniversity = uiState.universityToEdit,
+                                onSave = { name, grades, rules -> viewModel.saveUniversity(name, grades, rules) },
+                                onCancel = { viewModel.cancelAddingUniversity() }
+                            )
+                        }
+                        else -> {
+                            GpaCalculatorScreen(
+                                viewModel = viewModel,
+                                uiState = uiState
+                            )
+                        }
                     }
                 }
             }
         }
     }
 }
-
-// --- Main Calculator Screen ---
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -94,41 +116,85 @@ fun GpaCalculatorScreen(viewModel: GpaViewModel, uiState: GpaUiState) {
     val context = LocalContext.current
     var showMenu by remember { mutableStateOf(false) }
 
-    // --- Import Launcher ---
+    var tempImageUri by remember { mutableStateOf<Uri?>(null) }
+
+    val cameraLauncher = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { success ->
+        if (success && tempImageUri != null) {
+            viewModel.onImagePicked(tempImageUri!!)
+        }
+    }
+    
+    val galleryLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if (uri != null) {
+            viewModel.onImagePicked(uri)
+        }
+    }
+    
+    val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { isGranted ->
+        if (isGranted) {
+            val file = File(context.cacheDir, "scan_temp_${System.currentTimeMillis()}.jpg")
+            val uri = FileProvider.getUriForFile(context, context.packageName + ".provider", file)
+            tempImageUri = uri
+            cameraLauncher.launch(uri)
+        } else {
+            Toast.makeText(context, "Camera permission needed", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    fun initiateScan(useCamera: Boolean) {
+        viewModel.startScan() 
+        if (useCamera) {
+            if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
+                val file = File(context.cacheDir, "scan_temp_${System.currentTimeMillis()}.jpg")
+                val uri = FileProvider.getUriForFile(context, context.packageName + ".provider", file)
+                tempImageUri = uri
+                cameraLauncher.launch(uri)
+            } else {
+                permissionLauncher.launch(Manifest.permission.CAMERA)
+            }
+        } else {
+            galleryLauncher.launch("image/*")
+        }
+    }
+
     val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri != null) {
             try {
-                val inputStream = context.contentResolver.openInputStream(uri)
-                val reader = BufferedReader(InputStreamReader(inputStream))
-                val jsonString = reader.readText()
-                viewModel.importData(jsonString)
-                reader.close()
-            } catch (e: Exception) {
-                Toast.makeText(context, "Error reading file", Toast.LENGTH_SHORT).show()
-            }
+                context.contentResolver.openInputStream(uri)?.use { inputStream ->
+                    val jsonString = BufferedReader(InputStreamReader(inputStream)).readText()
+                    viewModel.importData(jsonString)
+                }
+            } catch (e: Exception) { Toast.makeText(context, "Error", Toast.LENGTH_SHORT).show() }
         }
     }
 
-    // --- Export Launcher (Save File) ---
     val exportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
         if (uri != null) {
             try {
-                val jsonString = viewModel.getExportData()
-                context.contentResolver.openOutputStream(uri)?.use { outputStream ->
-                    outputStream.write(jsonString.toByteArray())
-                }
-                Toast.makeText(context, "Exported successfully!", Toast.LENGTH_SHORT).show()
-            } catch (e: Exception) {
-                Toast.makeText(context, "Error saving file", Toast.LENGTH_SHORT).show()
-            }
+                context.contentResolver.openOutputStream(uri)?.use { it.write(viewModel.getExportData().toByteArray()) }
+                Toast.makeText(context, "Exported!", Toast.LENGTH_SHORT).show()
+            } catch (e: Exception) { Toast.makeText(context, "Error", Toast.LENGTH_SHORT).show() }
         }
     }
 
-    // Scroll Logic for Subtitle
     val showStickySubtitle by remember {
-        derivedStateOf {
-            listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > 100
-        }
+        derivedStateOf { listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > 100 }
+    }
+    
+    var showScanDialog by remember { mutableStateOf(false) }
+
+    if (showScanDialog) {
+        AlertDialog(
+            onDismissRequest = { showScanDialog = false },
+            title = { Text("Scan Marksheet") },
+            text = { Text("Choose an option to capture the grades table.") },
+            confirmButton = {
+                TextButton(onClick = { showScanDialog = false; initiateScan(true) }) { Text("Camera") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showScanDialog = false; initiateScan(false) }) { Text("Gallery") }
+            }
+        )
     }
 
     Scaffold(
@@ -137,45 +203,29 @@ fun GpaCalculatorScreen(viewModel: GpaViewModel, uiState: GpaUiState) {
                 title = {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Text("GPA Calculator", fontWeight = FontWeight.Bold)
-                        
-                        AnimatedVisibility(
-                            visible = showStickySubtitle,
-                            enter = fadeIn(),
-                            exit = fadeOut()
-                        ) {
-                            Text(
-                                text = uiState.selectedUniversity.name,
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.primary
-                            )
+                        AnimatedVisibility(visible = showStickySubtitle, enter = fadeIn(), exit = fadeOut()) {
+                            Text(text = uiState.selectedUniversity.name, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
                         }
                     }
                 },
                 navigationIcon = {
-                    IconButton(onClick = { showMenu = true }) {
-                        Icon(Icons.Default.Menu, contentDescription = "Menu")
-                    }
-                    // Menu Dropdown
-                    DropdownMenu(
-                        expanded = showMenu,
-                        onDismissRequest = { showMenu = false }
-                    ) {
+                    IconButton(onClick = { showMenu = true }) { Icon(Icons.Default.Menu, "Menu") }
+                    DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
                         DropdownMenuItem(
                             text = { Text("Export to JSON") },
                             leadingIcon = { Icon(Icons.Default.Share, null) },
-                            onClick = {
-                                showMenu = false
-                                exportLauncher.launch("gpa_universities.json")
-                            }
+                            onClick = { showMenu = false; exportLauncher.launch("gpa_universities.json") }
                         )
                         DropdownMenuItem(
                             text = { Text("Import from JSON") },
                             leadingIcon = { Icon(Icons.Default.Add, null) },
-                            onClick = {
-                                showMenu = false
-                                importLauncher.launch("application/json") 
-                            }
+                            onClick = { showMenu = false; importLauncher.launch("application/json") }
                         )
+                    }
+                },
+                actions = {
+                    TextButton(onClick = { showScanDialog = true }) {
+                        Text("SCAN")
                     }
                 },
                 colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
@@ -185,37 +235,17 @@ fun GpaCalculatorScreen(viewModel: GpaViewModel, uiState: GpaUiState) {
             )
         },
         bottomBar = {
-            BottomAppBar(
-                containerColor = MaterialTheme.colorScheme.surface,
-                tonalElevation = 8.dp
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    OutlinedButton(
-                        onClick = { viewModel.clearAll() },
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Text("Clear")
-                    }
-                    Button(
-                        onClick = { viewModel.calculateGpa() },
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Text("Calculate GPA")
-                    }
+            BottomAppBar(containerColor = MaterialTheme.colorScheme.surface, tonalElevation = 8.dp) {
+                Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    OutlinedButton(onClick = { viewModel.clearAll() }, Modifier.weight(1f)) { Text("Clear") }
+                    Button(onClick = { viewModel.calculateGpa() }, Modifier.weight(1f)) { Text("Calculate") }
                 }
             }
         }
     ) { paddingValues ->
-        
         LazyColumn(
             state = listState,
-            modifier = Modifier
-                .padding(paddingValues)
-                .fillMaxSize()
-                .padding(horizontal = 16.dp),
+            modifier = Modifier.padding(paddingValues).fillMaxSize().padding(horizontal = 16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
             contentPadding = PaddingValues(bottom = 16.dp)
         ) {
@@ -230,22 +260,13 @@ fun GpaCalculatorScreen(viewModel: GpaViewModel, uiState: GpaUiState) {
                     onDeleteClick = { viewModel.deleteUniversity(it) }
                 )
             }
-
-            item {
-                SubjectCountHeader(
-                    count = uiState.subjects.size,
-                    onCountChange = { viewModel.setSubjectCount(it) }
-                )
-            }
-
+            item { SubjectCountHeader(count = uiState.subjects.size, onCountChange = { viewModel.setSubjectCount(it) }) }
             itemsIndexed(uiState.subjects) { index, subject ->
                 SubjectCard(
                     index = index + 1,
                     subject = subject,
                     university = uiState.selectedUniversity,
-                    onUpdate = { credits, grade -> 
-                        viewModel.updateSubject(index, credits, grade) 
-                    }
+                    onUpdate = { credits, grade -> viewModel.updateSubject(index, credits, grade) }
                 )
             }
         }
@@ -260,9 +281,7 @@ fun GpaCalculatorScreen(viewModel: GpaViewModel, uiState: GpaUiState) {
     }
 }
 
-// --- Helper Data Classes for Editing ---
-data class TempGrade(val id: String = UUID.randomUUID().toString(), var symbol: String, var pointStr: String)
-data class TempRule(val id: String = UUID.randomUUID().toString(), var minStr: String, var maxStr: String, var label: String)
+// --- RESTORED MISSING COMPONENTS ---
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -433,8 +452,6 @@ fun AddUniversityScreen(
         }
     }
 }
-
-// --- Sub-Components ---
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class, ExperimentalFoundationApi::class)
 @Composable

@@ -2,7 +2,7 @@ package com.example.gpacalculator
 
 import java.util.UUID
 
-// --- Data Models ---
+// --- Core Data Models ---
 
 data class Grade(
     val symbol: String,
@@ -21,13 +21,35 @@ data class University(
     val name: String,
     val grades: List<Grade>,
     val classifications: List<ClassificationRule>,
-    val isCustom: Boolean = false // New flag to identify user-added universities
+    val isCustom: Boolean = false
 )
 
 data class Subject(
     val id: String = UUID.randomUUID().toString(),
     var credits: Int = 0,
     var selectedGrade: Grade? = null
+)
+
+// --- Scan & UI Helper Models ---
+
+data class ScannedRow(
+    val id: String = UUID.randomUUID().toString(),
+    val detectedCredits: Int?,
+    val detectedGrade: String?,
+    val confidence: Float
+)
+
+data class TempGrade(
+    val id: String = UUID.randomUUID().toString(), 
+    var symbol: String, 
+    var pointStr: String
+)
+
+data class TempRule(
+    val id: String = UUID.randomUUID().toString(), 
+    var minStr: String, 
+    var maxStr: String, 
+    var label: String
 )
 
 // --- Predefined Universities ---
