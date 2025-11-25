@@ -26,6 +26,7 @@ data class University(
 
 data class Subject(
     val id: String = UUID.randomUUID().toString(),
+    var name: String = "", // Added Name field
     var credits: Int = 0,
     var selectedGrade: Grade? = null
 )
@@ -71,9 +72,8 @@ object UniversityPresets {
             Grade("DE", 5.5),
             Grade("EE", 5.0), 
             Grade("EF", 0.0),
-            // New additions
             Grade("FF", 0.0), 
-            Grade("AU", 0.0, isCreditCourse = false) // Audit = 0 credits logic handling
+            Grade("AU", 0.0, isCreditCourse = false)
         ),
         classifications = listOf(
             ClassificationRule(0.0, 5.5, "Pass Class"),

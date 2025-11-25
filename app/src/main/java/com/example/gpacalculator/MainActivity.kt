@@ -62,11 +62,35 @@ class MainActivity : ComponentActivity() {
                     }
                 }
                 
+                // PDF Launcher for "Finish" button in Print Screen
+                var pendingDetails by remember { mutableStateOf<StudentDetails?>(null) }
+                val pdfLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/pdf")) { uri ->
+                    if (uri != null && pendingDetails != null) {
+                        context.contentResolver.openOutputStream(uri)?.use { outputStream ->
+                            viewModel.generatePdf(outputStream, pendingDetails!!)
+                        }
+                    }
+                }
+
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
                     when {
+                        // 1. Print Flow
+                        uiState.isPrinting -> {
+                            PrintScreen(
+                                subjects = uiState.subjects,
+                                universityName = uiState.selectedUniversity.name,
+                                onGeneratePdf = { details -> 
+                                    pendingDetails = details
+                                    pdfLauncher.launch("Marksheet_${details.studentName}.pdf")
+                                },
+                                onUpdateSubjectName = { idx, name -> viewModel.updateSubjectName(idx, name) },
+                                onCancel = { viewModel.cancelPrinting() }
+                            )
+                        }
+                        // 2. Scan Flow
                         uiState.isScanning && uiState.scanImageUri != null && uiState.scannedRows == null -> {
                             if (uiState.isProcessingOcr) {
                                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -96,6 +120,7 @@ class MainActivity : ComponentActivity() {
                                 onCancel = { viewModel.cancelAddingUniversity() }
                             )
                         }
+                        // 3. Main Screen
                         else -> {
                             GpaCalculatorScreen(
                                 viewModel = viewModel,
@@ -275,6 +300,7 @@ fun GpaCalculatorScreen(viewModel: GpaViewModel, uiState: GpaUiState) {
             ResultDialog(
                 gpa = uiState.calculatedGpa!!,
                 classification = uiState.classification ?: "",
+                onPrintClick = { viewModel.startPrinting() }, // NEW: Print Trigger
                 onDismiss = { viewModel.dismissResult() }
             )
         }
@@ -282,6 +308,46 @@ fun GpaCalculatorScreen(viewModel: GpaViewModel, uiState: GpaUiState) {
 }
 
 // --- RESTORED COMPONENTS ---
+
+@Composable
+fun ResultDialog(
+    gpa: Double, 
+    classification: String, 
+    onPrintClick: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = { onDismiss() },
+        title = { Text("Calculation Result") },
+        text = {
+            Column {
+                Text(
+                    text = "$gpa",
+                    style = MaterialTheme.typography.displayMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = classification,
+                    style = MaterialTheme.typography.headlineSmall
+                )
+            }
+        },
+        confirmButton = {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                // CHANGED: Icons.Default.Share instead of Print (not in core)
+                OutlinedButton(onClick = onPrintClick) {
+                    Icon(Icons.Default.Share, null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("Print")
+                }
+                TextButton(onClick = onDismiss) {
+                    Text("Close")
+                }
+            }
+        }
+    )
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -618,7 +684,6 @@ fun SubjectCard(
             Spacer(modifier = Modifier.height(8.dp))
             
             Text("Credits", style = MaterialTheme.typography.labelSmall)
-            // CHANGED: Range from 1..4 to 0..4
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 (0..4).forEach { credit ->
                     val isSelected = subject.credits == credit
@@ -652,31 +717,4 @@ fun SubjectCard(
             }
         }
     }
-}
-
-@Composable
-fun ResultDialog(gpa: Double, classification: String, onDismiss: () -> Unit) {
-    AlertDialog(
-        onDismissRequest = { onDismiss() },
-        title = { Text("Calculation Result") },
-        text = {
-            Column {
-                Text(
-                    text = "$gpa",
-                    style = MaterialTheme.typography.displayMedium,
-                    color = MaterialTheme.colorScheme.primary,
-                    fontWeight = FontWeight.Bold
-                )
-                Text(
-                    text = classification,
-                    style = MaterialTheme.typography.headlineSmall
-                )
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = onDismiss) {
-                Text("Close")
-            }
-        }
-    )
 }
