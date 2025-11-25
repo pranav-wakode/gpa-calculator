@@ -281,7 +281,7 @@ fun GpaCalculatorScreen(viewModel: GpaViewModel, uiState: GpaUiState) {
     }
 }
 
-// --- RESTORED MISSING COMPONENTS ---
+// --- RESTORED COMPONENTS ---
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -618,8 +618,9 @@ fun SubjectCard(
             Spacer(modifier = Modifier.height(8.dp))
             
             Text("Credits", style = MaterialTheme.typography.labelSmall)
+            // CHANGED: Range from 1..4 to 0..4
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                (1..4).forEach { credit ->
+                (0..4).forEach { credit ->
                     val isSelected = subject.credits == credit
                     FilterChip(
                         selected = isSelected,

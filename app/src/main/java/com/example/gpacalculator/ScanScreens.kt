@@ -36,7 +36,6 @@ import kotlin.math.max
 import kotlin.math.min
 
 // --- HELPER: Load Scaled Bitmap ---
-// INCREASED to 3000px to ensure high accuracy on full-page scans
 fun loadScaledBitmap(context: Context, uri: Uri, maxDimension: Int = 3000): Bitmap? {
     return try {
         var input = context.contentResolver.openInputStream(uri)
@@ -74,9 +73,7 @@ fun CropScreen(
     onCancel: () -> Unit
 ) {
     val context = LocalContext.current
-    val bitmap = remember(imageUri) {
-        loadScaledBitmap(context, imageUri)
-    }
+    val bitmap = remember(imageUri) { loadScaledBitmap(context, imageUri) }
 
     if (bitmap == null) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -104,41 +101,57 @@ fun CropScreen(
         }
     }
 
-    // State to hold the layout info of the image container
-    var containerSize by remember { mutableStateOf(Size.Zero) }
-    var imageRenderedSize by remember { mutableStateOf(Size.Zero) }
-    var imageOffset by remember { mutableStateOf(Offset.Zero) }
+    // Track the size of the Image Composable itself
+    var viewWidth by remember { mutableStateOf(1f) }
+    var viewHeight by remember { mutableStateOf(1f) }
 
     Scaffold(
         topBar = {
             TopAppBar(
                 title = { Text("Select Grades Area") },
-                navigationIcon = {
-                    IconButton(onClick = onCancel) { Icon(Icons.Default.Close, "Cancel") }
-                },
+                navigationIcon = { IconButton(onClick = onCancel) { Icon(Icons.Default.Close, "Cancel") } },
                 actions = {
                     IconButton(onClick = {
-                        if (!roiRect.isEmpty && imageRenderedSize.width > 0) {
+                        if (!roiRect.isEmpty) {
                             try {
-                                // Exact math to map screen coordinates to bitmap coordinates
-                                val scaleX = bitmap.width / imageRenderedSize.width
-                                val scaleY = bitmap.height / imageRenderedSize.height
+                                // --- UV PROJECTION CROP LOGIC ---
+                                // 1. Calculate the actual rendered dimensions of the bitmap inside the view (Fit)
+                                val bitmapRatio = bitmap.width.toFloat() / bitmap.height.toFloat()
+                                val viewRatio = viewWidth / viewHeight
                                 
-                                val relativeLeft = roiRect.left - imageOffset.x
-                                val relativeTop = roiRect.top - imageOffset.y
-                                val relativeRight = roiRect.right - imageOffset.x
-                                val relativeBottom = roiRect.bottom - imageOffset.y
+                                var renderedW = viewWidth
+                                var renderedH = viewHeight
+                                var offsetX = 0f
+                                var offsetY = 0f
 
-                                val cropLeft = (relativeLeft * scaleX).toInt().coerceIn(0, bitmap.width - 1)
-                                val cropTop = (relativeTop * scaleY).toInt().coerceIn(0, bitmap.height - 1)
-                                val cropRight = (relativeRight * scaleX).toInt().coerceIn(0, bitmap.width)
-                                val cropBottom = (relativeBottom * scaleY).toInt().coerceIn(0, bitmap.height)
+                                if (bitmapRatio > viewRatio) {
+                                    // Bitmap is wider than view -> Fit to Width
+                                    renderedH = viewWidth / bitmapRatio
+                                    offsetY = (viewHeight - renderedH) / 2f
+                                } else {
+                                    // Bitmap is taller than view -> Fit to Height
+                                    renderedW = viewHeight * bitmapRatio
+                                    offsetX = (viewWidth - renderedW) / 2f
+                                }
+
+                                // 2. Map UI Rect to Bitmap Coordinates
+                                // Subtract offset (black bars)
+                                val activeRect = roiRect.translate(-offsetX, -offsetY)
                                 
-                                val cropWidth = cropRight - cropLeft
-                                val cropHeight = cropBottom - cropTop
+                                // Calculate ratios (0.0 to 1.0) relative to rendered image size
+                                val u1 = (activeRect.left / renderedW).coerceIn(0f, 1f)
+                                val v1 = (activeRect.top / renderedH).coerceIn(0f, 1f)
+                                val u2 = (activeRect.right / renderedW).coerceIn(0f, 1f)
+                                val v2 = (activeRect.bottom / renderedH).coerceIn(0f, 1f)
 
-                                if (cropWidth > 0 && cropHeight > 0) {
-                                    val cropped = Bitmap.createBitmap(bitmap, cropLeft, cropTop, cropWidth, cropHeight)
+                                // 3. Convert to Bitmap Pixels
+                                val cropX = (u1 * bitmap.width).toInt()
+                                val cropY = (v1 * bitmap.height).toInt()
+                                val cropW = ((u2 - u1) * bitmap.width).toInt()
+                                val cropH = ((v2 - v1) * bitmap.height).toInt()
+
+                                if (cropW > 0 && cropH > 0) {
+                                    val cropped = Bitmap.createBitmap(bitmap, cropX, cropY, cropW, cropH)
                                     onCropConfirmed(cropped)
                                 }
                             } catch (e: Exception) {
@@ -157,61 +170,44 @@ fun CropScreen(
                 .fillMaxSize()
                 .padding(padding)
                 .background(Color.Black)
+                .onGloballyPositioned { coordinates ->
+                    viewWidth = coordinates.size.width.toFloat()
+                    viewHeight = coordinates.size.height.toFloat()
+                }
+                .pointerInput(Unit) {
+                    detectDragGestures(
+                        onDragStart = { offset ->
+                            startOffset = offset
+                            currentOffset = offset
+                        },
+                        onDrag = { change, _ ->
+                            change.consume()
+                            currentOffset = change.position
+                        }
+                    )
+                }
         ) {
             Image(
                 bitmap = bitmap.asImageBitmap(),
                 contentDescription = "Crop",
                 contentScale = ContentScale.Fit,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .onGloballyPositioned { coordinates ->
-                        containerSize = Size(coordinates.size.width.toFloat(), coordinates.size.height.toFloat())
-                        
-                        val bitmapRatio = bitmap.width.toFloat() / bitmap.height.toFloat()
-                        val containerRatio = containerSize.width / containerSize.height
-                        
-                        if (bitmapRatio > containerRatio) {
-                            val w = containerSize.width
-                            val h = w / bitmapRatio
-                            imageRenderedSize = Size(w, h)
-                            imageOffset = Offset(0f, (containerSize.height - h) / 2f)
-                        } else {
-                            val h = containerSize.height
-                            val w = h * bitmapRatio
-                            imageRenderedSize = Size(w, h)
-                            imageOffset = Offset((containerSize.width - w) / 2f, 0f)
-                        }
-                    }
-                    .pointerInput(Unit) {
-                        detectDragGestures(
-                            onDragStart = { offset ->
-                                startOffset = offset
-                                currentOffset = offset
-                            },
-                            onDrag = { change, _ ->
-                                change.consume()
-                                currentOffset = change.position
-                            }
-                        )
-                    }
+                modifier = Modifier.fillMaxSize()
             )
 
             Canvas(modifier = Modifier.fillMaxSize()) {
                 drawRect(Color.Black.copy(alpha = 0.5f))
-                
                 if (!roiRect.isEmpty) {
                     drawRect(Color.Black.copy(alpha = 0.5f), topLeft = Offset.Zero, size = Size(size.width, roiRect.top))
                     drawRect(Color.Black.copy(alpha = 0.5f), topLeft = Offset(0f, roiRect.bottom), size = Size(size.width, size.height - roiRect.bottom))
                     drawRect(Color.Black.copy(alpha = 0.5f), topLeft = Offset(0f, roiRect.top), size = Size(roiRect.left, roiRect.height))
                     drawRect(Color.Black.copy(alpha = 0.5f), topLeft = Offset(roiRect.right, roiRect.top), size = Size(size.width - roiRect.right, roiRect.height))
-                    
                     drawRect(Color.Green, topLeft = roiRect.topLeft, size = roiRect.size, style = Stroke(3.dp.toPx()))
                 }
             }
             
             if (roiRect.isEmpty) {
                  Text(
-                    "Draw a box tightly around the table", 
+                    "Draw a box around grades", 
                     color = Color.White, 
                     modifier = Modifier.align(Alignment.Center)
                 )
@@ -277,7 +273,6 @@ fun VerificationScreen(
                     }
                 )
             }
-            
             item {
                 OutlinedButton(
                     onClick = { editableSubjects.add(Subject()) },
@@ -317,7 +312,8 @@ fun VerifyCard(
             
             Text("Credits: ${subject.credits}", style = MaterialTheme.typography.labelSmall)
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                (1..4).forEach { cr ->
+                // CHANGED: 0 to 4
+                (0..4).forEach { cr ->
                     FilterChip(
                         selected = subject.credits == cr,
                         onClick = { onUpdate(cr, null) },
