@@ -60,10 +60,20 @@ object UniversityPresets {
         id = "dbatu_preset",
         name = "DBATU",
         grades = listOf(
-            Grade("EX", 10.0), Grade("AA", 9.0), Grade("AB", 8.5),
-            Grade("BB", 8.0), Grade("BC", 7.5), Grade("CC", 7.0),
-            Grade("CD", 6.5), Grade("DD", 6.0), Grade("DE", 5.5),
-            Grade("EE", 5.0), Grade("EF", 0.0)
+            Grade("EX", 10.0), 
+            Grade("AA", 9.0), 
+            Grade("AB", 8.5),
+            Grade("BB", 8.0), 
+            Grade("BC", 7.5), 
+            Grade("CC", 7.0),
+            Grade("CD", 6.5), 
+            Grade("DD", 6.0), 
+            Grade("DE", 5.5),
+            Grade("EE", 5.0), 
+            Grade("EF", 0.0),
+            // New additions
+            Grade("FF", 0.0), 
+            Grade("AU", 0.0, isCreditCourse = false) // Audit = 0 credits logic handling
         ),
         classifications = listOf(
             ClassificationRule(0.0, 5.5, "Pass Class"),

@@ -36,7 +36,8 @@ import kotlin.math.max
 import kotlin.math.min
 
 // --- HELPER: Load Scaled Bitmap ---
-fun loadScaledBitmap(context: Context, uri: Uri, maxDimension: Int = 1500): Bitmap? { // Increased to 1500 for better OCR text quality
+// INCREASED to 3000px to ensure high accuracy on full-page scans
+fun loadScaledBitmap(context: Context, uri: Uri, maxDimension: Int = 3000): Bitmap? {
     return try {
         var input = context.contentResolver.openInputStream(uri)
         val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
@@ -119,17 +120,15 @@ fun CropScreen(
                     IconButton(onClick = {
                         if (!roiRect.isEmpty && imageRenderedSize.width > 0) {
                             try {
-                                // Calculate scaling based on the ACTUAL rendered image size, not the container
+                                // Exact math to map screen coordinates to bitmap coordinates
                                 val scaleX = bitmap.width / imageRenderedSize.width
                                 val scaleY = bitmap.height / imageRenderedSize.height
                                 
-                                // 1. Subtract the offset (black bars) from the touch coordinates
                                 val relativeLeft = roiRect.left - imageOffset.x
                                 val relativeTop = roiRect.top - imageOffset.y
                                 val relativeRight = roiRect.right - imageOffset.x
                                 val relativeBottom = roiRect.bottom - imageOffset.y
 
-                                // 2. Scale to Bitmap coordinates
                                 val cropLeft = (relativeLeft * scaleX).toInt().coerceIn(0, bitmap.width - 1)
                                 val cropTop = (relativeTop * scaleY).toInt().coerceIn(0, bitmap.height - 1)
                                 val cropRight = (relativeRight * scaleX).toInt().coerceIn(0, bitmap.width)
@@ -166,25 +165,20 @@ fun CropScreen(
                 modifier = Modifier
                     .fillMaxSize()
                     .onGloballyPositioned { coordinates ->
-                        // Logic to calculate where the image actually IS on screen
                         containerSize = Size(coordinates.size.width.toFloat(), coordinates.size.height.toFloat())
                         
                         val bitmapRatio = bitmap.width.toFloat() / bitmap.height.toFloat()
                         val containerRatio = containerSize.width / containerSize.height
                         
                         if (bitmapRatio > containerRatio) {
-                            // Width fits exactly, height is smaller (black bars top/bottom)
                             val w = containerSize.width
                             val h = w / bitmapRatio
                             imageRenderedSize = Size(w, h)
-                            // Offset is only in Y
                             imageOffset = Offset(0f, (containerSize.height - h) / 2f)
                         } else {
-                            // Height fits exactly, width is smaller (black bars left/right)
                             val h = containerSize.height
                             val w = h * bitmapRatio
                             imageRenderedSize = Size(w, h)
-                            // Offset is only in X
                             imageOffset = Offset((containerSize.width - w) / 2f, 0f)
                         }
                     }
@@ -206,7 +200,6 @@ fun CropScreen(
                 drawRect(Color.Black.copy(alpha = 0.5f))
                 
                 if (!roiRect.isEmpty) {
-                    // Clear out selected area
                     drawRect(Color.Black.copy(alpha = 0.5f), topLeft = Offset.Zero, size = Size(size.width, roiRect.top))
                     drawRect(Color.Black.copy(alpha = 0.5f), topLeft = Offset(0f, roiRect.bottom), size = Size(size.width, size.height - roiRect.bottom))
                     drawRect(Color.Black.copy(alpha = 0.5f), topLeft = Offset(0f, roiRect.top), size = Size(roiRect.left, roiRect.height))
@@ -218,7 +211,7 @@ fun CropScreen(
             
             if (roiRect.isEmpty) {
                  Text(
-                    "Draw a box around grades", 
+                    "Draw a box tightly around the table", 
                     color = Color.White, 
                     modifier = Modifier.align(Alignment.Center)
                 )

@@ -11,6 +11,7 @@ import kotlinx.coroutines.withContext
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import kotlin.math.abs
+import kotlin.math.max
 import kotlin.math.min
 
 object OcrProcessor {
@@ -18,7 +19,6 @@ object OcrProcessor {
     private val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
 
     suspend fun processImage(bitmap: Bitmap, university: University): List<ScannedRow> = withContext(Dispatchers.Default) {
-        // ML Kit safe bitmap check
         val safeBitmap = if (bitmap.config != Bitmap.Config.ARGB_8888) {
             bitmap.copy(Bitmap.Config.ARGB_8888, true)
         } else {
@@ -38,23 +38,33 @@ object OcrProcessor {
 
     private fun parseTextToRows(text: Text, university: University): List<ScannedRow> {
         val allElements = text.textBlocks.flatMap { it.lines }.flatMap { it.elements }
+            .filter { it.text.isNotBlank() }
 
         if (allElements.isEmpty()) return emptyList()
 
+        // Clustering: Vertical Overlap
+        val sortedElements = allElements.sortedBy { it.boundingBox?.top ?: 0 }
         val rows = mutableListOf<MutableList<Text.Element>>()
-        val sortedElements = allElements.sortedBy { it.boundingBox?.centerY() ?: 0 }
-        
-        for (element in sortedElements) {
-            val elementY = element.boundingBox?.centerY() ?: continue
-            val elementH = element.boundingBox?.height() ?: 20
 
-            val matchedRow = rows.find { row ->
-                val rowY = row.first().boundingBox?.centerY() ?: 0
-                abs(rowY - elementY) < (elementH * 0.5) 
+        for (element in sortedElements) {
+            val eBox = element.boundingBox ?: continue
+            
+            val bestRow = rows.find { row ->
+                val anchor = row.first().boundingBox ?: return@find false
+                val intersectTop = max(eBox.top, anchor.top)
+                val intersectBottom = min(eBox.bottom, anchor.bottom)
+                
+                if (intersectBottom > intersectTop) {
+                    val overlapHeight = intersectBottom - intersectTop
+                    val minHeight = min(eBox.height(), anchor.height())
+                    overlapHeight > (minHeight * 0.3)
+                } else {
+                    false
+                }
             }
 
-            if (matchedRow != null) {
-                matchedRow.add(element)
+            if (bestRow != null) {
+                bestRow.add(element)
             } else {
                 rows.add(mutableListOf(element))
             }
@@ -63,30 +73,48 @@ object OcrProcessor {
         val results = mutableListOf<ScannedRow>()
 
         for (row in rows) {
-            // Sort L->R
             row.sortBy { it.boundingBox?.left ?: 0 }
+
+            // --- FILTERING HEADER ROWS ---
+            // If row contains header keywords, skip it completely
+            val rowText = row.joinToString(" ") { it.text.uppercase() }
+            if (rowText.contains("CREDIT") || rowText.contains("GRADE") || rowText.contains("SUBJECT") || rowText.contains("CODE")) {
+                continue
+            }
 
             var bestCredit: Int? = null
             var bestGrade: String? = null
 
             for (element in row) {
                 val rawText = element.text.trim().uppercase()
+                    .replace("O", "0") 
+                    .replace("I", "1")
+                    .replace("L", "1")
 
-                // FIX: Allow 1 or 2 digits (e.g. "4", "04", "10")
-                if (bestCredit == null && rawText.matches(Regex("^\\d{1,2}$"))) {
-                    val digit = rawText.toIntOrNull()
-                    if (digit != null && digit in 1..50) {
-                        bestCredit = digit
-                        continue
+                // 1. Try as Credit (Strict numbers)
+                if (bestCredit == null) {
+                    if (rawText.matches(Regex("^\\d{1,2}$"))) {
+                        val digit = rawText.toIntOrNull()
+                        if (digit != null && digit <= 25) { 
+                            bestCredit = digit
+                            continue 
+                        }
                     }
                 }
 
+                // 2. Try as Grade
+                val gradeText = element.text.trim().uppercase()
                 if (bestGrade == null) {
-                    val match = findBestGradeMatch(rawText, university.grades)
+                    val match = findBestGradeMatch(gradeText, university.grades)
                     if (match != null) {
                         bestGrade = match
                     }
                 }
+            }
+
+            // --- SPECIAL LOGIC FOR 'AU' (AUDIT) ---
+            if (bestGrade == "AU") {
+                bestCredit = 0
             }
 
             if (bestCredit != null || bestGrade != null) {
