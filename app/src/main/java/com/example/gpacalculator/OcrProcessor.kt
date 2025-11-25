@@ -1,6 +1,10 @@
 package com.example.gpacalculator
 
 import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.ColorMatrix
+import android.graphics.ColorMatrixColorFilter
+import android.graphics.Paint
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.Text
 import com.google.mlkit.vision.text.TextRecognition
@@ -17,15 +21,39 @@ object OcrProcessor {
     private val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
 
     suspend fun processImage(bitmap: Bitmap, university: University): List<ScannedRow> = withContext(Dispatchers.Default) {
-        // Ensure safe bitmap config for ML Kit
-        val safeBitmap = if (bitmap.config != Bitmap.Config.ARGB_8888) {
-            bitmap.copy(Bitmap.Config.ARGB_8888, true)
-        } else {
-            bitmap
+        // 1. PRE-PROCESSING: Binarization (High Contrast Black & White)
+        // This removes the colored background pattern which confuses OCR.
+        val processedBitmap = toGrayscaleHighContrast(bitmap)
+
+        val textResult = runTextRecognition(processedBitmap)
+        parseTextToRows(textResult, university)
+    }
+
+    private fun toGrayscaleHighContrast(src: Bitmap): Bitmap {
+        val width = src.width
+        val height = src.height
+        val dest = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(dest)
+        val paint = Paint()
+
+        // Saturation 0 (Grayscale) + High Contrast
+        val colorMatrix = ColorMatrix().apply {
+            setSaturation(0f)
+            // Increase contrast matrix
+            val scale = 1.5f // Contrast scale
+            val translate = (-.5f * scale + .5f) * 255f
+            val array = floatArrayOf(
+                scale, 0f, 0f, 0f, translate,
+                0f, scale, 0f, 0f, translate,
+                0f, 0f, scale, 0f, translate,
+                0f, 0f, 0f, 1f, 0f
+            )
+            postConcat(ColorMatrix(array))
         }
 
-        val textResult = runTextRecognition(safeBitmap)
-        parseTextToRows(textResult, university)
+        paint.colorFilter = ColorMatrixColorFilter(colorMatrix)
+        canvas.drawBitmap(src, 0f, 0f, paint)
+        return dest
     }
 
     private suspend fun runTextRecognition(bitmap: Bitmap): Text = suspendCancellableCoroutine { cont ->
@@ -41,79 +69,88 @@ object OcrProcessor {
 
         if (allElements.isEmpty()) return emptyList()
 
-        // --- STRATEGY: SEMANTIC PAIRING ---
-        // Instead of grouping lines, we identify "Candidates" for Credits and Grades
-        // and match them based on proximity.
-
         val creditCandidates = mutableListOf<Text.Element>()
         val gradeCandidates = mutableListOf<Text.Element>()
 
+        // --- 1. LOOSE CLASSIFICATION ---
         for (element in allElements) {
+            // Cleanup text
             val raw = element.text.trim().uppercase()
+                .replace(".", "")  // Remove dots (OCR noise)
+                .replace(",", "")
                 .replace("O", "0")
                 .replace("I", "1")
                 .replace("L", "1")
                 .replace("|", "1")
+                .replace("S", "5")
+                .replace("B", "8") // Sometimes B looks like 8, but for credit column we want numbers
 
-            // 1. Identify Credit Candidate (Strict Number, 0-25)
+            // Is it a valid Credit? (0-10)
             if (raw.matches(Regex("^\\d{1,2}$"))) {
                 val num = raw.toIntOrNull()
-                if (num != null && num <= 25) {
+                if (num != null && num <= 12) { // Typically per-subject credits are small
                     creditCandidates.add(element)
-                    continue // An element can't be both
+                    continue
                 }
             }
 
-            // 2. Identify Grade Candidate (Matches University Schema)
-            // Use raw text without number replacement for grades
+            // Is it a valid Grade?
+            // For grades, we use the original text but with some cleaning
             val gradeRaw = element.text.trim().uppercase()
             if (findBestGradeMatch(gradeRaw, university.grades) != null) {
                 gradeCandidates.add(element)
             }
         }
 
-        // Sort Credits top-to-bottom to process in order
+        // Sort both lists Top-to-Bottom
         creditCandidates.sortBy { it.boundingBox?.top ?: 0 }
+        gradeCandidates.sortBy { it.boundingBox?.top ?: 0 }
 
         val results = mutableListOf<ScannedRow>()
-        
-        // Used to prevent reusing the same grade for multiple credits (though rare)
+
+        // --- 2. STRATEGY A: COLUMN ZIPPING (High Confidence) ---
+        // If we found exactly the same number of credits and grades (and > 2 rows),
+        // we assume they correspond perfectly in order. This ignores horizontal alignment issues.
+        if (creditCandidates.size == gradeCandidates.size && creditCandidates.size >= 2) {
+            for (i in creditCandidates.indices) {
+                val creditVal = cleanCredit(creditCandidates[i].text)
+                val gradeVal = findBestGradeMatch(gradeCandidates[i].text.trim().uppercase(), university.grades)
+
+                if (creditVal != null) {
+                    results.add(ScannedRow(detectedCredits = creditVal, detectedGrade = gradeVal, confidence = 1.0f))
+                }
+            }
+            return results // Return early if Zipper worked
+        }
+
+        // --- 3. STRATEGY B: NEAREST NEIGHBOR (Fallback) ---
+        // If counts don't match (OCR missed a value), we use spatial logic.
+
         val usedGradeIndices = mutableSetOf<Int>()
 
         for (creditElement in creditCandidates) {
             val creditBox = creditElement.boundingBox ?: continue
-            val creditVal = creditElement.text.trim()
-                .replace("O", "0").replace("I", "1").replace("L", "1").replace("|", "1")
-                .toIntOrNull() ?: continue
+            val creditVal = cleanCredit(creditElement.text) ?: continue
 
-            // Find the BEST Grade match for this Credit
-            // Criteria:
-            // 1. Must be to the RIGHT of the credit
-            // 2. Vertical center must be within a tolerance (e.g., +/- 50px)
-            // 3. Pick the CLOSEST one horizontally
-            
             var bestGradeIndex = -1
             var minDistance = Int.MAX_VALUE
 
             for (i in gradeCandidates.indices) {
                 if (usedGradeIndices.contains(i)) continue
-                
+
                 val gradeElement = gradeCandidates[i]
                 val gradeBox = gradeElement.boundingBox ?: continue
 
-                // Check 1: Is it to the right?
-                if (gradeBox.left > creditBox.left) {
-                    // Check 2: Vertical Alignment (Center-to-Center)
-                    val creditCenterY = creditBox.centerY()
-                    val gradeCenterY = gradeBox.centerY()
-                    val verticalDiff = abs(creditCenterY - gradeCenterY)
-                    
-                    // Tolerance: allow large vertical shift (e.g. 1.5x element height) because
-                    // grade fonts are often taller or misaligned in tables.
-                    val tolerance = maxOf(creditBox.height(), gradeBox.height()) * 1.5
-                    
+                // Filter 1: Grade must be to the RIGHT of Credit
+                if (gradeBox.centerX() > creditBox.centerX()) {
+
+                    // Filter 2: Vertical alignment (loose tolerance)
+                    val verticalDiff = abs(creditBox.centerY() - gradeBox.centerY())
+                    // Allow half-inch vertical drift (~60px or 2x height)
+                    val tolerance = (creditBox.height() + gradeBox.height())
+
                     if (verticalDiff < tolerance) {
-                        // Check 3: Distance
+                        // Filter 3: Horizontal Proximity
                         val distance = gradeBox.left - creditBox.right
                         if (distance < minDistance) {
                             minDistance = distance
@@ -125,43 +162,34 @@ object OcrProcessor {
 
             if (bestGradeIndex != -1) {
                 usedGradeIndices.add(bestGradeIndex)
-                val matchedGradeElement = gradeCandidates[bestGradeIndex]
-                val gradeVal = findBestGradeMatch(matchedGradeElement.text.trim().uppercase(), university.grades)
-                
-                results.add(
-                    ScannedRow(
-                        detectedCredits = creditVal,
-                        detectedGrade = gradeVal,
-                        confidence = 1.0f
-                    )
-                )
-            }
-        }
-
-        // --- SPECIAL CASE: Audit Subjects (AU) with 0 Credits ---
-        // Sometimes '0' credit is not printed, or OCR misses it. 
-        // If we have 'AU' grades left over, add them with 0 credits.
-        for (i in gradeCandidates.indices) {
-            if (usedGradeIndices.contains(i)) continue
-            val gradeRaw = gradeCandidates[i].text.trim().uppercase()
-            val matched = findBestGradeMatch(gradeRaw, university.grades)
-            
-            if (matched == "AU" || matched == "PP" || matched == "NP") {
-                results.add(ScannedRow(detectedCredits = 0, detectedGrade = matched, confidence = 0.8f))
+                val gradeVal = findBestGradeMatch(gradeCandidates[bestGradeIndex].text.trim().uppercase(), university.grades)
+                results.add(ScannedRow(detectedCredits = creditVal, detectedGrade = gradeVal, confidence = 0.8f))
             }
         }
 
         return results
     }
 
+    private fun cleanCredit(text: String): Int? {
+        return text.trim().uppercase()
+            .replace(".", "")
+            .replace(",", "")
+            .replace("O", "0")
+            .replace("I", "1")
+            .replace("L", "1")
+            .replace("|", "1")
+            .replace("S", "5")
+            .toIntOrNull()
+    }
+
     private fun findBestGradeMatch(text: String, grades: List<Grade>): String? {
         // Exact match
         grades.find { it.symbol.equals(text, ignoreCase = true) }?.let { return it.symbol }
 
-        // Fix common OCR errors
-        var fixedText = text.replace("0", "O").replace("1", "I").replace("|", "I")
+        // Fix common OCR errors for letters
+        var fixedText = text.replace("0", "O").replace("1", "I").replace("|", "I").replace("8", "B")
         grades.find { it.symbol.equals(fixedText, ignoreCase = true) }?.let { return it.symbol }
-        
+
         // Fuzzy match (Distance <= 1)
         grades.forEach { grade ->
             if (abs(grade.symbol.length - text.length) <= 1) {
