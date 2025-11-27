@@ -18,7 +18,7 @@ object Storage {
             uniJson.put("name", uni.name)
             uniJson.put("isCustom", true)
 
-            // Serialize Grades
+            // 1. Serialize Grades
             val gradesArray = JSONArray()
             uni.grades.forEach { grade ->
                 val gJson = JSONObject()
@@ -29,7 +29,7 @@ object Storage {
             }
             uniJson.put("grades", gradesArray)
 
-            // Serialize Classifications
+            // 2. Serialize Classifications
             val classArray = JSONArray()
             uni.classifications.forEach { rule ->
                 val rJson = JSONObject()
@@ -39,6 +39,17 @@ object Storage {
                 classArray.put(rJson)
             }
             uniJson.put("classifications", classArray)
+
+            // 3. FIX: Serialize Percentage Rules (This was missing)
+            val percentArray = JSONArray()
+            uni.percentageRules.forEach { pRule ->
+                val pJson = JSONObject()
+                pJson.put("min", pRule.minGpa)
+                pJson.put("max", pRule.maxGpa)
+                pJson.put("formula", pRule.formula)
+                percentArray.put(pJson)
+            }
+            uniJson.put("percentageRules", percentArray)
 
             jsonArray.put(uniJson)
         }
@@ -52,8 +63,6 @@ object Storage {
         return parseJsonToUniversities(jsonString)
     }
 
-    // --- Export / Import Helpers ---
-
     fun getExportString(context: Context): String {
         val prefs = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
         return prefs.getString(KEY_CUSTOM_UNIS, "[]") ?: "[]"
@@ -61,20 +70,14 @@ object Storage {
 
     fun importFromString(context: Context, jsonString: String): Boolean {
         try {
-            // Validate by parsing first
             val newUnis = parseJsonToUniversities(jsonString)
-            if (newUnis.isEmpty() && jsonString != "[]") return false // Basic validation
+            if (newUnis.isEmpty() && jsonString != "[]") return false
 
-            // Merge with existing
             val current = loadCustomUniversities(context).toMutableList()
-            
-            // Avoid duplicates by ID
             newUnis.forEach { newUni ->
-                // Remove old version if exists, then add new
                 current.removeAll { it.id == newUni.id }
                 current.add(newUni)
             }
-            
             saveCustomUniversities(context, current)
             return true
         } catch (e: Exception) {
@@ -90,6 +93,7 @@ object Storage {
             for (i in 0 until jsonArray.length()) {
                 val obj = jsonArray.getJSONObject(i)
                 
+                // Grades
                 val gradesList = mutableListOf<Grade>()
                 val gradesArray = obj.getJSONArray("grades")
                 for (j in 0 until gradesArray.length()) {
@@ -103,6 +107,7 @@ object Storage {
                     )
                 }
 
+                // Classifications
                 val classList = mutableListOf<ClassificationRule>()
                 val classArray = obj.getJSONArray("classifications")
                 for (k in 0 until classArray.length()) {
@@ -116,12 +121,30 @@ object Storage {
                     )
                 }
 
+                // FIX: Percentage Rules
+                val percentList = mutableListOf<PercentageRule>()
+                // Use optJSONArray because old saves might not have this field
+                val percentArray = obj.optJSONArray("percentageRules") 
+                if (percentArray != null) {
+                    for (p in 0 until percentArray.length()) {
+                        val pObj = percentArray.getJSONObject(p)
+                        percentList.add(
+                            PercentageRule(
+                                minGpa = pObj.getDouble("min"),
+                                maxGpa = pObj.getDouble("max"),
+                                formula = pObj.getString("formula")
+                            )
+                        )
+                    }
+                }
+
                 list.add(
                     University(
                         id = obj.getString("id"),
                         name = obj.getString("name"),
                         grades = gradesList,
                         classifications = classList,
+                        percentageRules = percentList,
                         isCustom = true
                     )
                 )
