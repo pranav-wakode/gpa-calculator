@@ -20,11 +20,12 @@ data class GpaUiState(
     val selectedUniversity: University = UniversityPresets.DBATU,
     val subjects: List<Subject> = generateSubjects(5),
     val calculatedGpa: Double? = null,
+    val calculatedPercentage: Double? = null,
     val classification: String? = null,
     
     // Navigation States
     val isAddingUniversity: Boolean = false,
-    val isPrinting: Boolean = false, // Shows Print Screen
+    val isPrinting: Boolean = false,
     val universityToEdit: University? = null,
     val importMessage: String? = null,
     
@@ -60,134 +61,60 @@ class GpaViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    // --- PRINTING LOGIC ---
+    // --- RESULT & CALCULATION LOGIC ---
 
-    fun startPrinting() {
-        // Ensure subjects have default names if empty
-        _uiState.update { state ->
-            val namedSubjects = state.subjects.mapIndexed { index, sub ->
-                if (sub.name.isBlank()) sub.copy(name = "Subject ${index + 1}") else sub
-            }
-            state.copy(isPrinting = true, subjects = namedSubjects, calculatedGpa = null) // Close dialog
+    // FIX: This function was missing or unresolved
+    fun dismissResult() {
+        _uiState.update { 
+            it.copy(
+                calculatedGpa = null, 
+                calculatedPercentage = null, 
+                classification = null
+            ) 
         }
     }
 
-    fun cancelPrinting() {
-        _uiState.update { it.copy(isPrinting = false) }
-    }
+    fun calculateGpa() {
+        val state = _uiState.value
+        val uni = state.selectedUniversity
+        val subjects = state.subjects
 
-    fun updateSubjectName(index: Int, newName: String) {
-        _uiState.update { state ->
-            val updated = state.subjects.toMutableList()
-            updated[index] = updated[index].copy(name = newName)
-            state.copy(subjects = updated)
-        }
-    }
+        var totalPoints = 0.0
+        var totalCredits = 0
 
-    fun generatePdf(outputStream: OutputStream, details: StudentDetails) {
-        try {
-            // Re-calculate GPA internally to be sure (though should be same)
-            // Or pass the previous result. Let's use current state.
-            val subjects = _uiState.value.subjects
-            var totalPoints = 0.0
-            var totalCredits = 0
-            subjects.forEach { subject ->
-                val grade = subject.selectedGrade
-                if (grade != null && grade.isCreditCourse) {
-                    totalPoints += (grade.point * subject.credits)
-                    totalCredits += subject.credits
-                }
-            }
-            val gpa = if(totalCredits > 0) totalPoints / totalCredits else 0.0
-            val finalGpa = BigDecimal(gpa).setScale(2, RoundingMode.HALF_UP).toDouble()
-            
-            // Find Classification
-            val uni = _uiState.value.selectedUniversity
-            val cls = uni.classifications.find { finalGpa >= it.minGpa && finalGpa < it.maxGpa }
-            val label = cls?.label ?: "Result Unknown"
-
-            PdfGenerator.generateMarksheetPdf(
-                context,
-                outputStream,
-                details,
-                subjects,
-                finalGpa,
-                label
-            )
-            _uiState.update { it.copy(importMessage = "PDF Saved successfully!") }
-        } catch (e: Exception) {
-            _uiState.update { it.copy(importMessage = "Failed to generate PDF") }
-        }
-    }
-
-    // --- SCANNER LOGIC ---
-
-    fun startScan() {
-        _uiState.update { it.copy(isScanning = true, scanImageUri = null, scannedRows = null) }
-    }
-
-    fun cancelScan() {
-        _uiState.update { it.copy(isScanning = false, scanImageUri = null, scannedRows = null) }
-    }
-
-    fun onImagePicked(uri: Uri) {
-        _uiState.update { it.copy(scanImageUri = uri) }
-    }
-
-    fun processCroppedImage(bitmap: Bitmap) {
-        _uiState.update { it.copy(isProcessingOcr = true) }
-        viewModelScope.launch {
-            try {
-                val results = OcrProcessor.processImage(bitmap, _uiState.value.selectedUniversity)
-                _uiState.update { it.copy(isProcessingOcr = false, scannedRows = results) }
-            } catch (e: Exception) {
-                e.printStackTrace()
-                _uiState.update { it.copy(isProcessingOcr = false, importMessage = "OCR Failed: ${e.localizedMessage}") }
+        subjects.forEach { subject ->
+            val grade = subject.selectedGrade
+            if (grade != null && grade.isCreditCourse) {
+                totalPoints += (grade.point * subject.credits)
+                totalCredits += subject.credits
             }
         }
-    }
 
-    fun applyScannedSubjects(subjects: List<Subject>) {
-        _uiState.update { current ->
-            // Assign default names
-            val namedSubjects = subjects.mapIndexed { i, s -> s.copy(name = "Subject ${i + 1}") }
-            
-            val merged = if (current.subjects.all { it.credits == 0 && it.selectedGrade == null }) {
-                namedSubjects
-            } else {
-                current.subjects + namedSubjects
-            }
-            current.copy(
-                subjects = merged,
-                isScanning = false,
-                scanImageUri = null,
-                scannedRows = null,
-                calculatedGpa = null
-            )
+        if (totalCredits == 0) {
+            _uiState.update { it.copy(calculatedGpa = 0.0, calculatedPercentage = 0.0, classification = "N/A") }
+            return
         }
-    }
 
-    // --- IMPORT / EXPORT ---
+        val rawGpa = totalPoints / totalCredits
+        val finalGpa = BigDecimal(rawGpa).setScale(2, RoundingMode.HALF_UP).toDouble()
+        
+        val cls = uni.classifications.find { finalGpa >= it.minGpa && finalGpa < it.maxGpa }
+        val label = cls?.label ?: "Result Unknown"
 
-    fun getExportData(): String {
-        return Storage.getExportString(context)
-    }
-
-    fun importData(jsonString: String) {
-        val success = Storage.importFromString(context, jsonString)
-        if (success) {
-            refreshUniversities()
-            _uiState.update { it.copy(importMessage = "Universities imported successfully!") }
+        // Calculate Percentage using Formula Evaluator
+        val rule = uni.percentageRules.find { finalGpa >= it.minGpa && finalGpa < it.maxGpa }
+        val percent = if (rule != null) {
+            FormulaEvaluator.evaluate(rule.formula, finalGpa)
         } else {
-            _uiState.update { it.copy(importMessage = "Failed to import. Invalid data.") }
+            0.0
+        }
+
+        _uiState.update { 
+            it.copy(calculatedGpa = finalGpa, calculatedPercentage = percent, classification = label) 
         }
     }
 
-    fun clearImportMessage() {
-        _uiState.update { it.copy(importMessage = null) }
-    }
-
-    // --- MAIN ACTIONS ---
+    // --- SUBJECT & UNIVERSITY MANAGEMENT ---
 
     fun setUniversity(university: University) {
         _uiState.update { it.copy(selectedUniversity = university, calculatedGpa = null, classification = null) }
@@ -227,44 +154,6 @@ class GpaViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun dismissResult() {
-        _uiState.update { it.copy(calculatedGpa = null, classification = null) }
-    }
-
-    fun calculateGpa() {
-        val state = _uiState.value
-        val uni = state.selectedUniversity
-        val subjects = state.subjects
-
-        var totalPoints = 0.0
-        var totalCredits = 0
-
-        subjects.forEach { subject ->
-            val grade = subject.selectedGrade
-            if (grade != null && grade.isCreditCourse) {
-                totalPoints += (grade.point * subject.credits)
-                totalCredits += subject.credits
-            }
-        }
-
-        if (totalCredits == 0) {
-            _uiState.update { it.copy(calculatedGpa = 0.0, classification = "N/A") }
-            return
-        }
-
-        val rawGpa = totalPoints / totalCredits
-        val finalGpa = BigDecimal(rawGpa).setScale(2, RoundingMode.HALF_UP).toDouble()
-        
-        val cls = uni.classifications.find { finalGpa >= it.minGpa && finalGpa < it.maxGpa }
-        val label = cls?.label ?: "Result Unknown"
-
-        _uiState.update { 
-            it.copy(calculatedGpa = finalGpa, classification = label) 
-        }
-    }
-
-    // --- CRUD ---
-
     fun startAddingUniversity() {
         _uiState.update { it.copy(isAddingUniversity = true, universityToEdit = null) }
     }
@@ -277,25 +166,25 @@ class GpaViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update { it.copy(isAddingUniversity = false, universityToEdit = null) }
     }
 
-    fun saveUniversity(name: String, grades: List<Grade>, rules: List<ClassificationRule>) {
+    fun saveUniversity(name: String, grades: List<Grade>, rules: List<ClassificationRule>, percentageRules: List<PercentageRule>) {
         if (name.isBlank() || grades.isEmpty()) return
 
         val editMode = _uiState.value.universityToEdit
         val customs = Storage.loadCustomUniversities(context).toMutableList()
         
+        val newUni = University(
+            id = editMode?.id ?: UUID.randomUUID().toString(),
+            name = name,
+            grades = grades,
+            classifications = rules,
+            percentageRules = percentageRules,
+            isCustom = true
+        )
+
         if (editMode != null) {
             val index = customs.indexOfFirst { it.id == editMode.id }
-            if (index != -1) {
-                customs[index] = editMode.copy(name = name, grades = grades, classifications = rules)
-            }
+            if (index != -1) customs[index] = newUni
         } else {
-            val newUni = University(
-                id = UUID.randomUUID().toString(),
-                name = name,
-                grades = grades,
-                classifications = rules,
-                isCustom = true
-            )
             customs.add(newUni)
         }
 
@@ -309,5 +198,130 @@ class GpaViewModel(application: Application) : AndroidViewModel(application) {
         customs.removeAll { it.id == university.id }
         Storage.saveCustomUniversities(context, customs)
         refreshUniversities()
+    }
+
+    // --- PRINTING ---
+
+    fun startPrinting() {
+        _uiState.update { state ->
+            val namedSubjects = state.subjects.mapIndexed { index, sub ->
+                if (sub.name.isBlank()) sub.copy(name = "Subject ${index + 1}") else sub
+            }
+            state.copy(isPrinting = true, subjects = namedSubjects, calculatedGpa = null)
+        }
+    }
+
+    fun cancelPrinting() {
+        _uiState.update { it.copy(isPrinting = false) }
+    }
+
+    fun updateSubjectName(index: Int, newName: String) {
+        _uiState.update { state ->
+            val updated = state.subjects.toMutableList()
+            updated[index] = updated[index].copy(name = newName)
+            state.copy(subjects = updated)
+        }
+    }
+
+    fun generatePdf(outputStream: OutputStream, details: StudentDetails) {
+        try {
+            val subjects = _uiState.value.subjects
+            val state = _uiState.value
+            // Assuming calc already done or re-do logic. For safety, using stored values or re-calculating.
+            // We need GPA/Class for the PDF. We can recalc here quickly.
+            
+            var totalPoints = 0.0
+            var totalCredits = 0
+            subjects.forEach { subject ->
+                val grade = subject.selectedGrade
+                if (grade != null && grade.isCreditCourse) {
+                    totalPoints += (grade.point * subject.credits)
+                    totalCredits += subject.credits
+                }
+            }
+            val gpaVal = if(totalCredits > 0) totalPoints / totalCredits else 0.0
+            val finalGpa = BigDecimal(gpaVal).setScale(2, RoundingMode.HALF_UP).toDouble()
+            
+            val uni = state.selectedUniversity
+            val cls = uni.classifications.find { finalGpa >= it.minGpa && finalGpa < it.maxGpa }?.label ?: "Result Unknown"
+            val pRule = uni.percentageRules.find { finalGpa >= it.minGpa && finalGpa < it.maxGpa }
+            val percent = if (pRule != null) FormulaEvaluator.evaluate(pRule.formula, finalGpa) else 0.0
+
+            PdfGenerator.generateMarksheetPdf(
+                context,
+                outputStream,
+                details,
+                subjects,
+                finalGpa,
+                percent,
+                cls
+            )
+            _uiState.update { it.copy(importMessage = "PDF Saved successfully!") }
+        } catch (e: Exception) {
+            e.printStackTrace()
+            _uiState.update { it.copy(importMessage = "Failed to generate PDF") }
+        }
+    }
+
+    // --- SCANNER ---
+
+    fun startScan() {
+        _uiState.update { it.copy(isScanning = true, scanImageUri = null, scannedRows = null) }
+    }
+
+    fun cancelScan() {
+        _uiState.update { it.copy(isScanning = false, scanImageUri = null, scannedRows = null) }
+    }
+
+    fun onImagePicked(uri: Uri) {
+        _uiState.update { it.copy(scanImageUri = uri) }
+    }
+
+    fun processCroppedImage(bitmap: Bitmap) {
+        _uiState.update { it.copy(isProcessingOcr = true) }
+        viewModelScope.launch {
+            try {
+                val results = OcrProcessor.processImage(bitmap, _uiState.value.selectedUniversity)
+                _uiState.update { it.copy(isProcessingOcr = false, scannedRows = results) }
+            } catch (e: Exception) {
+                e.printStackTrace()
+                _uiState.update { it.copy(isProcessingOcr = false, importMessage = "OCR Failed: ${e.localizedMessage}") }
+            }
+        }
+    }
+
+    fun applyScannedSubjects(subjects: List<Subject>) {
+        _uiState.update { current ->
+            val namedSubjects = subjects.mapIndexed { i, s -> s.copy(name = "Subject ${i + 1}") }
+            val merged = if (current.subjects.all { it.credits == 0 && it.selectedGrade == null }) {
+                namedSubjects
+            } else {
+                current.subjects + namedSubjects
+            }
+            current.copy(
+                subjects = merged,
+                isScanning = false,
+                scanImageUri = null,
+                scannedRows = null,
+                calculatedGpa = null
+            )
+        }
+    }
+
+    // --- IMPORT / EXPORT ---
+
+    fun getExportData(): String = Storage.getExportString(context)
+
+    fun importData(jsonString: String) {
+        if (Storage.importFromString(context, jsonString)) {
+            refreshUniversities()
+            _uiState.update { it.copy(importMessage = "Import Successful") }
+        } else {
+            _uiState.update { it.copy(importMessage = "Import Failed") }
+        }
+    }
+
+    fun clearImportMessage() {
+        _uiState.update { it.copy(importMessage = null) }
     }
 }
